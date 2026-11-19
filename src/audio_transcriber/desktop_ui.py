@@ -33,6 +33,7 @@ from .desktop import worker_command
 from .desktop_dictation import DictationWindow
 from .desktop_editing import RevisionHistoryDialog, SegmentEditDialog
 from .desktop_player import LecturePlayer
+from .desktop_setup import ModelDialog, UpdateDialog
 from .editing import (
     EditRevision,
     current_revision,
@@ -81,6 +82,7 @@ class LectureWindow(QMainWindow):
         self._job_active = False
         self.dictation_window: DictationWindow | None = None
         self.closing = False
+        self.setup_dialog: ModelDialog | None = None
         self.job_kind = "transcription"
         self.process = QProcess(self)
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -106,6 +108,9 @@ class LectureWindow(QMainWindow):
         self.models_label.setWordWrap(True)
         setup = QHBoxLayout()
         setup.addWidget(self.models_label, 1)
+        self.manage_models_button = QPushButton("Manage models…")
+        self.manage_models_button.clicked.connect(self.manage_models)
+        setup.addWidget(self.manage_models_button)
         self.models_button = QPushButton("Choose model folder…")
         self.models_button.clicked.connect(self.choose_models)
         setup.addWidget(self.models_button)
@@ -305,6 +310,13 @@ class LectureWindow(QMainWindow):
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.status)
+        self.updates = UpdateDialog(self)
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Manage models…", self.manage_models)
+        help_menu.addAction("Check for updates…", self.show_updates)
+        if not self.cleanup_available:
+            self.cleanup_style.setCurrentText("off")
+            self.format_style.setCurrentIndex(self.format_style.findData("off"))
         self.cleanup_style.currentTextChanged.connect(self._buttons)
         self.format_style.currentIndexChanged.connect(self._buttons)
         self.export_format.currentTextChanged.connect(self._buttons)
@@ -318,7 +330,39 @@ class LectureWindow(QMainWindow):
 
     @property
     def busy(self) -> bool:
-        return self._job_active or bool(self.dictation_window and self.dictation_window.busy)
+        return (
+            self._job_active
+            or bool(self.dictation_window and self.dictation_window.busy)
+            or bool(self.setup_dialog and self.setup_dialog.task)
+        )
+
+    @property
+    def cleanup_available(self) -> bool:
+        spec = MANIFEST[str(self.cleanup_model.currentData())]
+        return all((self.model_root / spec.id / entry.name).is_file() for entry in spec.files)
+
+    def manage_models(self) -> None:
+        if self.setup_dialog is None:
+            self.setup_dialog = ModelDialog(self)
+        self.setup_dialog.show()
+        self.setup_dialog.raise_()
+
+    def show_updates(self) -> None:
+        self.updates.show()
+        self.updates.check_now(True)
+
+    def first_launch(self) -> None:
+        installed = [
+            spec.id
+            for spec in MANIFEST.values()
+            if spec.task == "speech"
+            and all((self.model_root / spec.id / f.name).is_file() for f in spec.files)
+        ]
+        if not installed and not self.sessions:
+            self.manage_models()
+        elif not self.model.currentData():
+            self.model.setCurrentIndex(self.model.findData(installed[0]))
+        self.updates.auto_check()
 
     def open_dictation(self) -> None:
         if self.dictation_window is None:
@@ -717,6 +761,7 @@ class LectureWindow(QMainWindow):
     def _buttons(self) -> None:
         for control in (
             self.import_button,
+            self.manage_models_button,
             self.models_button,
             self.ffmpeg_button,
             self.model,
@@ -948,6 +993,15 @@ class LectureWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.player.player.stop()
+        if self.updates.task or (self.setup_dialog and self.setup_dialog.task):
+            self.updates.pending_close = True
+            if self.updates.task:
+                self.updates.task.cancelled.set()
+            if self.setup_dialog and self.setup_dialog.task:
+                self.setup_dialog.task.cancelled.set()
+                self.setup_dialog.task.finished.connect(self.close)
+            event.ignore()
+            return
         if self.busy:
             self.closing = True
             if self.dictation_window is not None:

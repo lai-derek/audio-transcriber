@@ -80,6 +80,7 @@ def main() -> None:
     parser.add_argument("--ffmpeg", type=Path, required=True)
     parser.add_argument("--check-cleanup", action="store_true")
     parser.add_argument("--download-model", action="store_true")
+    parser.add_argument("--check-updater", action="store_true")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parents[1]
     for name in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
@@ -110,12 +111,13 @@ def main() -> None:
     run(
         [
             str(compiler),
-            f"--define=BundleDir={bundle}",
-            f"--define=AppName={APP_NAME}",
-            f"--define=AppId={{{APP_ID}",
-            f"--define=DesktopDir={desktop_dir}",
-            f"--output-dir={output}",
-            "--output-filename=audio-transcriber-validation",
+            f"/DBundleDir={bundle}",
+            f"/DAppName={APP_NAME}",
+            f"/DAppId={{{APP_ID}",
+            f"/DDesktopDir={desktop_dir}",
+            "/DBundleCompression=none",
+            f"/O{output}",
+            "/Faudio-transcriber-validation",
             str(ROOT / "packaging/audio-transcriber.iss"),
         ],
         base / "compile.log",
@@ -321,29 +323,73 @@ def main() -> None:
     run(
         [
             str(compiler),
-            f"--define=BundleDir={bundle}",
-            f"--define=AppName={APP_NAME}",
-            f"--define=AppId={{{APP_ID}",
-            f"--define=DesktopDir={desktop_dir}",
-            "--define=AppVersion=0.1.1",
-            f"--output-dir={output}",
-            "--output-filename=audio-transcriber-validation-upgrade",
+            f"/DBundleDir={bundle}",
+            f"/DAppName={APP_NAME}",
+            f"/DAppId={{{APP_ID}",
+            f"/DDesktopDir={desktop_dir}",
+            "/DAppVersion=0.2.1",
+            "/DBundleCompression=none",
+            f"/O{output}",
+            "/Faudio-transcriber-validation-upgrade",
             str(ROOT / "packaging/audio-transcriber.iss"),
         ],
         base / "compile-upgrade.log",
         cwd=ROOT,
     )
-    run(
-        [
-            str(output / "audio-transcriber-validation-upgrade.exe"),
-            *common,
-            f"/LOG={base / 'upgrade-detail.log'}",
-        ],
-        base / "upgrade.log",
-        cwd=base,
-    )
+    if args.check_updater:
+        cache = base / "update-cache"
+        cache.mkdir()
+        setup = cache / "audio-transcriber-0.2.1-windows-x64.exe"
+        shutil.copy2(output / "audio-transcriber-validation-upgrade.exe", setup)
+        helper = cache / "audio-transcriber-updater.exe"
+        shutil.copy2(app_dir / helper.name, helper)
+        request = cache / "request.json"
+        request.write_text(
+            json.dumps(
+                {
+                    "version": "0.2.1",
+                    "size": setup.stat().st_size,
+                    "sha256": sha256(setup),
+                    "install_dir": str(app_dir),
+                    "arguments": [
+                        "--data-dir",
+                        str(base / "update-reopen-library"),
+                        "--model-root",
+                        str(model_root),
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        reopen_library = base / "update-reopen-library"
+        reopen_library.mkdir()
+        (reopen_library / "update-settings.json").write_text('{"automatic": false}')
+        run([str(helper), str(request)], base / "upgrade.log", cwd=cache)
+        reopened_pid = json.loads((cache / "result.json").read_text())["reopened_pid"]
+        run(
+            [
+                str(Path(os.environ["WINDIR"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"),
+                "-NoProfile",
+                "-File",
+                str(ROOT / "host-validation/Close-UpdatedApp.ps1"),
+                "-ProcessId",
+                str(reopened_pid),
+            ],
+            base / "update-reopen.log",
+            cwd=base,
+        )
+    else:
+        run(
+            [
+                str(output / "audio-transcriber-validation-upgrade.exe"),
+                *common,
+                f"/LOG={base / 'upgrade-detail.log'}",
+            ],
+            base / "upgrade.log",
+            cwd=base,
+        )
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_KEY) as key:
-        if winreg.QueryValueEx(key, "DisplayVersion")[0] != "0.1.1":
+        if winreg.QueryValueEx(key, "DisplayVersion")[0] != "0.2.1":
             raise RuntimeError("Upgrade registration did not advance")
     if snapshot(inside_library) != original_inside or snapshot(outside_library) != original_outside:
         raise RuntimeError("Versioned reinstall changed a validation library")
@@ -376,7 +422,7 @@ def main() -> None:
     if not nested_note.is_file() or sha256(nested_note) != note_hash:
         raise RuntimeError("Uninstall removed or changed an unknown nested file")
     results = {
-        "compiler_version": "7.1.0",
+        "compiler_version": "see compile.log",
         "compile": "passed",
         "installer_sha256": sha256(installer),
         "payload_files_verified": len(payload),
@@ -388,7 +434,8 @@ def main() -> None:
         "shortcuts_outside_validation_storage_created": False,
         "installed_worker_cpu_inference": "passed",
         "reinstall": "passed",
-        "versioned_reinstall": "0.1.0 to 0.1.1; same application payload",
+        "versioned_reinstall": "0.2.0 to 0.2.1; same application payload",
+        "independent_updater_and_reopen": "passed" if args.check_updater else "not requested",
         "installed_worker_model_download": "passed" if args.download_model else "not requested",
         "installed_lecture_defaults": "light / structured"
         if args.check_cleanup

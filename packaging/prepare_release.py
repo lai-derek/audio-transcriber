@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tarfile
@@ -31,6 +32,12 @@ def git(*arguments: str) -> str:
 def main() -> None:
     configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = configuration["project"]["version"]
+    package = (ROOT / "src/audio_transcriber/__init__.py").read_text(encoding="utf-8")
+    installer_script = (ROOT / "packaging/audio-transcriber.iss").read_text(encoding="utf-8")
+    if f'__version__ = "{version}"' not in package or not re.search(
+        r'#define AppVersion "' + re.escape(version) + r'"', installer_script
+    ):
+        raise RuntimeError("Package, application, and installer versions must agree")
     destination = ROOT / "dist/release"
     source = destination / f"audio_transcriber-{version}.tar.gz"
     wheel = destination / f"audio_transcriber-{version}-py3-none-any.whl"

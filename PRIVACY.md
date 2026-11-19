@@ -38,16 +38,21 @@ sends Unicode input without using the clipboard. **Copy text** writes the select
 recovered text to the clipboard when you request it. Dictation diagnostics may
 contain transcript text and local paths; review them before sharing.
 
-## Explicit network actions
+## Downloads and update checks
 
-- `models download` requests approved files from `huggingface.co`. The HTTP
+- **Manage models** and `models download` request approved files from `huggingface.co`. The HTTP
   client can follow redirects to the hosting service's download/CDN endpoints.
   Installed files must match the manifest's checksums and sizes.
 - `evaluate` reads a supplied manifest and fetches its declared audio using
   HTTPS or a local `file:` URL. HTTPS evaluation sources are not restricted to
   Hugging Face. Review the manifest and source before running it.
 
-These commands request downloads; they do not intentionally upload your lecture
+- Installed apps check GitHub for new releases at startup, at most once a day.
+  Disable automatic checks in **Help → Check for updates**. Clicking **Update**
+  downloads an installer from GitHub; no recordings or transcript content is sent.
+  Downloaded installers and update logs are cached separately from your library.
+
+These actions request downloads; they do not intentionally upload your lecture
 recordings or transcripts. Remote services receive the normal request metadata,
 including the requesting IP address. Ordinary transcription and cleanup do not download
 missing models automatically.

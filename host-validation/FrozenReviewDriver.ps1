@@ -21,8 +21,8 @@ for($attempt=0; $attempt -lt 2; $attempt++) {
         $transcript=FindControl $main 'Transcript' $edit
         if(-not (ValueOf $transcript).Current.IsReadOnly) { throw 'Transcript unexpectedly writable' }
         if($attempt -eq 0) {
-            if((ValueOf (FindControl $main 'Cleanup style' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'light') { throw 'Fresh lecture cleanup default differs' }
-            if((ValueOf (FindControl $main 'Formatting style' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'Mostly structured') { throw 'Fresh lecture formatting default differs' }
+            if((ValueOf (FindControl $main 'Cleanup style' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'off') { throw 'Fresh lecture cleanup default differs' }
+            if((ValueOf (FindControl $main 'Formatting style' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'Off') { throw 'Fresh lecture formatting default differs' }
             foreach($model in @('whisper-tiny.en-int4-ov','whisper-base.en-int4-ov','Choose a speech model')) {
                 SelectCombo $p.Id $h $main 'Speech model' $model
             }
@@ -40,7 +40,7 @@ for($attempt=0; $attempt -lt 2; $attempt++) {
             $dictationHandle=[OwnWindow]::Find($p.Id,'Audio Transcriber — Live dictation')
             FindControl $dictation 'Microphone' ([System.Windows.Automation.ControlType]::ComboBox) | Out-Null
             FindControl $dictation 'Record a copy' $button | Out-Null
-            if((ValueOf (FindControl $dictation 'Cleanup' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'medium') { throw 'Fresh dictation cleanup default differs' }
+            if((ValueOf (FindControl $dictation 'Cleanup' ([System.Windows.Automation.ControlType]::ComboBox))).Current.Value -ne 'off') { throw 'Fresh dictation cleanup default differs' }
             FindControl $dictation 'Mostly prose' ([System.Windows.Automation.ControlType]::Text) | Out-Null
             $shortcut=ValueOf (FindControl $dictation 'Dictation shortcut' $edit)
             $shortcut.SetValue('Ctrl+Shift+F10')
@@ -133,6 +133,6 @@ for($attempt=0; $attempt -lt 2; $attempt++) {
         $p.Dispose()
     }
 }
-[ordered]@{runs=$runs; playback=$playback; edits_saved=2; search_selection_matches=$true; reopened_history_persisted=$true; native_exports=12; dictation_controls=$true; fresh_lecture_defaults='light / structured'; fresh_dictation_defaults='medium / prose'; microphone_recording_started=$false; cleanup_and_formatting_selectors=$true; dropdown_selection=$true; dropdowns=@('Speech model','Transcription device','Transcript layer','Export format')} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Report -Encoding utf8
+[ordered]@{runs=$runs; playback=$playback; edits_saved=2; search_selection_matches=$true; reopened_history_persisted=$true; native_exports=12; dictation_controls=$true; fresh_lecture_defaults='off / off (no cleanup model)'; fresh_dictation_defaults='off / prose (no cleanup model)'; microphone_recording_started=$false; cleanup_and_formatting_selectors=$true; dropdown_selection=$true; dropdowns=@('Speech model','Transcription device','Transcript layer','Export format')} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Report -Encoding utf8
 Write-Output 'Frozen native playback, seek, edits, search, history and close/reopen passed'
 

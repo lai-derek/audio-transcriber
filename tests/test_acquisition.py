@@ -177,6 +177,56 @@ def test_installed_corruption_detected(tmp_path: Path, tiny_fixture: Path, monke
         verify_installed(models, spec)
 
 
+def test_cancelled_download_removes_stage(tmp_path, tiny_fixture, monkeypatch):
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    models = tmp_path / "models"
+    with pytest.raises(AcquisitionError, match="cancelled"):
+        download_model(spec.id, models, local_fetcher(tiny_fixture), cancelled=lambda: True)
+    assert not list(models.iterdir())
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_download_repairs_existing_model_and_keeps_old_files(
+    tmp_path, tiny_fixture, monkeypatch, damage
+):
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    models = tmp_path / "models"
+    installed = download_model(spec.id, models, local_fetcher(tiny_fixture))
+    if damage == "missing":
+        (installed / "tokenizer.json").unlink()
+    else:
+        (installed / "tokenizer.json").write_text("broken")
+    (installed / "personal-note.txt").write_text("keep this file")
+    repaired = download_model(spec.id, models, local_fetcher(tiny_fixture))
+    assert verify_installed(models, spec) == repaired
+    previous = list(models.glob(f".previous-{spec.id}-*"))
+    assert len(previous) == 1
+    assert (previous[0] / "personal-note.txt").read_text() == "keep this file"
+
+
+def test_failed_repair_keeps_existing_model_in_place(tmp_path, tiny_fixture, monkeypatch):
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    models = tmp_path / "models"
+    installed = download_model(spec.id, models, local_fetcher(tiny_fixture))
+    (installed / "tokenizer.json").write_text("broken")
+    old = {p.name: p.read_bytes() for p in installed.iterdir()}
+    rename = os.rename
+
+    def fail_promotion(source, destination):
+        if Path(source).name.startswith(".stage-"):
+            raise OSError("promotion failed")
+        return rename(source, destination)
+
+    monkeypatch.setattr(os, "rename", fail_promotion)
+    with pytest.raises(OSError, match="promotion failed"):
+        download_model(spec.id, models, local_fetcher(tiny_fixture))
+    assert {p.name: p.read_bytes() for p in installed.iterdir()} == old
+    assert not list(models.glob(".stage-*"))
+
+
 def test_url_construction_is_manifest_only(tmp_path: Path, tiny_fixture: Path) -> None:
     spec = local_spec(tmp_path)
     url = spec.url_for("tokenizer.json")

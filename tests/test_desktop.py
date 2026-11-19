@@ -296,7 +296,8 @@ cleanup_session(store,session,Fixture(),mode='dictation',style='medium')
     assert '"transformation"' in destination.read_text()
     reopened = LectureWindow(window.store.data_dir)
     assert reopened.cleanup_mode.currentData() == "dictation"
-    assert reopened.cleanup_style.currentText() == "medium"
+    # Missing cleanup weights disable AI on reopen without losing the saved choice.
+    assert reopened.cleanup_style.currentText() == "off"
     assert reopened.cleanup_device.currentText() == "NPU"
     reopened.library.setCurrentRow(0)
     reopened.layer.setCurrentText("AI")
@@ -318,12 +319,12 @@ def test_automatic_cleanup_failure_preserves_raw(app, window, three_second_wav):
 
 def test_cleanup_defaults_and_off_persist(app, tmp_path):
     window = LectureWindow(tmp_path / "library")
-    assert window.cleanup_style.currentText() == "light"
+    assert window.cleanup_style.currentText() == "off"
     assert window.cleanup_device.currentText() == "AUTO"
     assert window.device.currentText() == "CPU"
-    assert window.format_style.currentData() == "structured"
+    assert window.format_style.currentData() == "off"
     window.open_dictation()
-    assert window.dictation_window.cleanup.currentText() == "medium"
+    assert window.dictation_window.cleanup.currentText() == "off"
     window.dictation_window.close()
     window.cleanup_style.setCurrentText("off")
     window.format_style.setCurrentIndex(window.format_style.findData("off"))

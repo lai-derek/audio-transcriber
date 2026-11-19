@@ -2,7 +2,7 @@
 
 The Windows app uses unmodified PyPI wheels for PySide6/Shiboken 6.11.2 and
 Qt 6.11.2. `third-party-sources.json` lists the upstream archives and SHA-256
-hashes. The release's `audio-transcriber-0.1.0-library-sources.zip` contains those
+hashes. The release's `audio-transcriber-0.2.0-library-sources.zip` contains those
 archives, this guide, and notices. Qt DLLs and plugins remain separate files;
 compatible rebuilt libraries can replace them in `_internal/PySide6/`.
 Replace Shiboken in `_internal/shiboken6/`. Close the app before replacing files.
@@ -66,3 +66,17 @@ Qt/PySide are used under LGPLv3 and FFmpeg under LGPLv2.1 or later. Their source
 archives contain their licenses and third-party notices. You may modify the
 libraries and reverse-engineer the app to debug those modifications. Audio Transcriber's
 own source and packaging recipe are available in the same release and repository.
+
+## Bundled command-line decoder
+
+The separate `_internal/ffmpeg/ffmpeg.exe` decoder is built from FFmpeg 9.0.2,
+whose exact archive and SHA-256 are recorded in `third-party-sources.json`.
+This is separate from Qt's playback DLLs described above.
+
+Run `prepare_ffmpeg.py`, then `build_ffmpeg.sh` in an MSYS2 UCRT64 environment
+with Make and the UCRT64 GCC toolchain. In the repository, these scripts are under
+`packaging/`; the source ZIP includes copies. The build disables GPL, nonfree,
+network protocols, and automatic detection of external libraries. It enables
+local WAV/MP3/MOV demuxing, supported audio decoders, resampling, and PCM WAV
+output. Its license is LGPLv2.1 or later. Replace the executable with a compatible
+modified build to use your changes; the application invokes it as a separate process.

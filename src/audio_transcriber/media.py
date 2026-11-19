@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess  # noqa: S404 - arguments are a fixed array without shell
+import sys
 import tempfile
 import wave
 from dataclasses import dataclass
@@ -106,6 +107,10 @@ def resolve_ffmpeg(configured: str | None = None) -> str | None:
     if configured:
         expanded = str(Path(configured).expanduser())
         return shutil.which(expanded) or expanded
+    if getattr(sys, "frozen", False):
+        bundled = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "ffmpeg/ffmpeg.exe"
+        if bundled.is_file():
+            return str(bundled)
     return shutil.which("ffmpeg")
 
 

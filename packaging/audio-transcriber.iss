@@ -2,7 +2,10 @@
   #define AppName "Audio Transcriber"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
+#endif
+#ifndef BundleCompression
+  #define BundleCompression "lzma2"
 #endif
 #ifndef AppId
   #define AppId "{{3E0FB1F0-E39B-47B2-86F8-A99EB0495727}"
@@ -22,9 +25,12 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=derek-l8
-AppPublisherURL=https://github.com/derek-l8/npu-scribe
-AppSupportURL=https://github.com/derek-l8/npu-scribe/issues
-AppUpdatesURL=https://github.com/derek-l8/npu-scribe/releases
+AppPublisherURL=https://github.com/derek-l8/audio-transcriber
+AppSupportURL=https://github.com/derek-l8/audio-transcriber/issues
+AppUpdatesURL=https://github.com/derek-l8/audio-transcriber/releases
+AppMutex=Local\AudioTranscriberRunning-v1
+CloseApplications=no
+RestartApplications=no
 LicenseFile=..\LICENSE
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
@@ -35,7 +41,7 @@ ArchitecturesInstallIn64BitMode=x64os
 OutputDir=..\dist\installer
 OutputBaseFilename=audio-transcriber-{#AppVersion}-windows-x64
 UninstallDisplayIcon={app}\Audio Transcriber.exe
-Compression=lzma2
+Compression={#BundleCompression}
 SolidCompression=yes
 
 [Tasks]
@@ -62,7 +68,6 @@ Type: files; Name: "{userstartup}\NPU Scribe.lnk"
 #endif
 
 [Run]
-Filename: "{app}\_internal\help\GettingStarted.html"; Description: "Open the setup guide"; Flags: shellexec postinstall skipifsilent
 Filename: "{app}\Audio Transcriber.exe"; Description: "Launch Audio Transcriber"; Flags: postinstall nowait skipifsilent
 
 ; Uninstall removes tracked installation files only. Do not recursively delete

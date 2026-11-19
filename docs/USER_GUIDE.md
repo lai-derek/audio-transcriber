@@ -7,109 +7,114 @@ variables used by the example. Ordinary transcription and cleanup are offline af
 
 ## Using the Windows installer
 
-A local Windows x64 installer is available to build; a prebuilt GitHub release
-has not been published. Run your installer and keep the default folder.
-Python and Git are unnecessary. The installer creates a desktop shortcut by
-default; launch-at-sign-in is optional and starts unchecked. The installer is unsigned, so Windows may show an unknown-publisher
-warning. The setup guide opens after installation and is also available under
-**Audio Transcriber > Getting started** in the Start menu.
+Installer builds target Windows x64 and include Python, the desktop app, and
+FFmpeg for compressed audio/video. A public binary has not been published yet;
+the [source route](#install-on-windows) is available now. Once published,
+download the Windows `.exe` from [GitHub Releases](https://github.com/derek-l8/audio-transcriber/releases).
 
-1. Open PowerShell and download the first speech model:
+1. Run the installer. It installs for your user without administrator access and
+   offers a desktop shortcut. Launch at sign-in is optional and starts unchecked.
+2. Open **Audio Transcriber**. **Manage models** opens for an empty library with
+   no installed speech model. Download the recommended English speech model, or choose the
+   smaller model for a quicker first test. The window shows download size,
+   progress, and any error. Cancel stops a download; click Download again to retry.
+3. Close setup, select the speech model, and press **Import lecture**. Review
+   the text and choose **Export**. MP3, M4A, and MP4 decoding is included.
 
-   ```powershell
-   $Worker = Join-Path $env:LOCALAPPDATA 'Programs\Audio Transcriber\audio-transcriber-worker.exe'
-   & $Worker models download whisper-tiny.en-int4-ov
-   if ($LASTEXITCODE -ne 0) { throw 'Model download failed; stop here.' }
-   ```
+**Manage models** is also available in the main window and Help menu. The
+optional AI cleanup model is about 4.5 GB and needs several GiB of RAM to run.
+Cleanup and formatting start **Off** when that model is missing. After downloading
+it, choose the cleanup and formatting settings you want. Downloads need internet
+access; ordinary processing works offline after setup.
 
-   Wait for `model ready`. If you chose another installation folder, change
-   `$Worker` to its worker executable. For lectures, download
-   `whisper-base.en-int4-ov` with the same command and select it in the app.
+If a downloaded model is incomplete or damaged, select it in **Manage models**
+and click **Download** again. A replacement is downloaded and verified before the
+old files are moved aside. Previous files stay in a `.previous-…` folder beside the
+model; you can remove that backup in File Explorer after checking the repaired model.
 
-2. For AI cleanup, download the separate text model (about 4.5 GB):
+The installer is unsigned. Windows may show an unknown-publisher warning.
+Obtain installers from this project's releases. Your library normally stays in
+`%LOCALAPPDATA%\audio-transcriber`; installation, updates, and uninstall keep it.
+Existing libraries from before the rename are reused automatically.
 
-   ```powershell
-   $Worker = Join-Path $env:LOCALAPPDATA 'Programs\Audio Transcriber\audio-transcriber-worker.exe'
-   & $Worker models download qwen2.5-7b-instruct-int4-ov
-   if ($LASTEXITCODE -ne 0) { throw 'Cleanup model download failed; stop here.' }
-   ```
+## Update the installed app
 
-   Choose **Off** for cleanup and formatting if you skip this download.
+Open **Help → Check for updates**. The app also checks at startup, at most once
+per day; disable **Check for updates automatically** in that window if desired.
+There are no automatic downloads or installations.
 
-3. For MP3, M4A, or MP4, extract a Windows executable build from the
-   [FFmpeg download page](https://www.ffmpeg.org/download.html). In Audio Transcriber,
-   use **Choose FFmpeg** to select `bin\ffmpeg.exe`.
+When a newer release is available, read its notes and choose **Update and reopen**.
+The app downloads and checks the installer, waits for processing, dictation,
+and model downloads to finish, then closes, installs, and reopens. Models,
+recordings, settings, and transcripts stay in place. Cancel stops a download or
+a pending update. **Later** postpones a pending update. No terminal commands are needed.
 
-Double-click the **Audio Transcriber** desktop shortcut, select your speech model, and press **Import lecture**.
-Light cleanup and Mostly structured formatting are the starting file settings. Review the transcript
-and export the version you want. [Live dictation](#live-dictation) uses the same
-models. Processing works offline after the downloads.
-
-To update, close the app and run the newer installer into the same folder.
-Your library and models stay in `%LOCALAPPDATA%\audio-transcriber`; uninstalling the app
-also keeps them. An existing library from before the rename is reused automatically.
-If you selected a custom library, keep using that folder.
+If a download fails, retry from the update window. If installation fails, its
+dialog offers Retry and gives the installer/log folder for repair. You can also
+close the app and run a newer installer manually. Update checks use GitHub and
+can fail while offline without affecting transcription. Only stable Windows x64
+releases are offered. In a source installation, the update button opens Releases;
+use the [source update procedure](#update-an-existing-checkout) to update a checkout.
 
 ## Install on Windows
 
 Use [64-bit Python 3.14](https://www.python.org/downloads/windows/) and PowerShell.
-Check that the requested Python is available with `py -3.14 --version`. Windows x64 is the locally tested target; other devices and operating
-systems are not fully validated.
+Select **Python 3.14 → Windows installer (64-bit)** on that page and run the installer.
+Check availability with `py -3.14 --version` before continuing. Windows x64 is the
+locally tested target.
 
 1. Get the source using **Code > Download ZIP** on GitHub, or clone it with Git.
    Extract or clone into a normal local folder outside OneDrive or other cloud
    sync. Open PowerShell in the folder containing `pyproject.toml`.
 
-   If you have Git, this creates the checkout under your local Projects folder:
+   If the project is already cloned, open that folder and continue at step 2.
+   For a new Git checkout, this creates the folder under your local Projects directory:
 
    ```powershell
-   $Projects = Join-Path $env:USERPROFILE 'Projects'
-   New-Item -ItemType Directory -Force -Path $Projects -ErrorAction Stop | Out-Null
-   Set-Location $Projects -ErrorAction Stop
-   git clone https://github.com/derek-l8/npu-scribe.git audio-transcriber
-   if ($LASTEXITCODE -ne 0) { throw 'Clone failed; stop here.' }
-   Set-Location audio-transcriber -ErrorAction Stop
+   & {
+       $Projects = Join-Path $env:USERPROFILE 'Projects'
+       New-Item -ItemType Directory -Force -Path $Projects -ErrorAction Stop | Out-Null
+       Set-Location $Projects -ErrorAction Stop
+       git clone https://github.com/derek-l8/audio-transcriber.git audio-transcriber
+       if ($LASTEXITCODE -ne 0) { throw 'Clone failed; stop here.' }
+       Set-Location audio-transcriber -ErrorAction Stop
+   }
    ```
 
 2. Install the engine in its own Python environment:
 
    ```powershell
-   py -3.14 -m venv .venv
-   if ($LASTEXITCODE -ne 0) { throw 'Environment creation failed; stop here.' }
-   .\.venv\Scripts\python.exe -m pip install '.[inference]'
-   if ($LASTEXITCODE -ne 0) { throw 'Installation failed; stop here.' }
+   & {
+       py -3.14 -m venv .venv
+       if ($LASTEXITCODE -ne 0) { throw 'Environment creation failed; stop here.' }
+       .\.venv\Scripts\python.exe -m pip install '.[desktop,inference]'
+       if ($LASTEXITCODE -ne 0) { throw 'Installation failed; stop here.' }
+   }
    ```
 
-3. Download a speech model. This step needs internet access:
+3. Open the desktop app and use **Manage models** to download a speech model:
 
    ```powershell
-   $Data = Join-Path $env:LOCALAPPDATA 'audio-transcriber'
-   .\.venv\Scripts\python.exe -m audio_transcriber.cli --data-dir "$Data" models download whisper-tiny.en-int4-ov
-   if ($LASTEXITCODE -ne 0) { throw 'Model download failed; stop here.' }
+   .\.venv\Scripts\python.exe -m audio_transcriber.desktop
    ```
 
-   The default library is your local application-data folder. Recordings, models,
-   and transcripts are stored there, separately from the code. `tiny.en` is a
-   small first-use model. For class lectures, use `whisper-base.en-int4-ov` when
-   the larger download is acceptable: it had lower error in the clip comparison
-   and improved several terms in the full lecture check. Download it with the
-   same command, replacing the model identifier, then select it in the desktop
-   or pass `--model whisper-base.en-int4-ov`. Neither model guarantees correct
-   course terms. [Measurements and limits](TESTED_DECISIONS.md).
-
-Run each step only after the previous one succeeds. The commands below use the
-environment in the source folder; no PowerShell activation script is required.
-Keep using the same library when downloading models and processing files.
+Run each step only after the previous step succeeds. No PowerShell activation
+script is required. For an existing clone, skip the clone command and open its
+folder. Source installations need a separate [FFmpeg executable](#cli-transcription-and-export)
+for compressed files; installer builds include one.
 
 ## CLI transcription and export
 
+These examples use `whisper-tiny.en-int4-ov`. Download that speech model in
+**Manage models** first, or set `$Model` to the model you installed.
 The examples use the environment under the source folder. If you run from
 another directory, use the full path to its Python executable followed by
 `-m audio_transcriber.cli`. Activating the environment is optional.
 
 For MP3, M4A, or MP4, get a Windows executable build through the
 [FFmpeg download page](https://www.ffmpeg.org/download.html), extract it to a
-local folder, and locate `bin\ffmpeg.exe`. The decoder is not bundled. For a WAV file, change the input path below to an existing mono,
+local folder, and locate `bin\ffmpeg.exe`. Source installations need this separate
+decoder; Windows installer builds include it. For a WAV file, use an existing mono,
 16 kHz, 16-bit PCM recording:
 
 ```powershell
@@ -185,15 +190,16 @@ start a new import to transcribe again.
 
 ## Desktop workflow
 
-Install and launch the optional interface with the
-[README desktop commands](../README.md#setup).
+Open the installed desktop shortcut, or use the
+[source setup](#install-on-windows).
 
 Choose an installed model and import WAV, MP3, M4A, or MP4. CPU is initially
 selected. Auto benchmarks available devices and can try other successful
 benchmark devices after inference fails; manual selection stays on that device.
-For compressed media, install FFmpeg on PATH or use **Choose FFmpeg** to select
-its executable. A command-line path or saved selection overrides PATH discovery.
-Restart the app after changing the machine's PATH.
+WAV imports require mono, 16 kHz, 16-bit PCM; other WAV recordings need the
+[conversion step](#cli-transcription-and-export) first.
+Installer builds include FFmpeg. For source installations, install FFmpeg on PATH
+or use **Choose FFmpeg** to select its executable. An explicit selection takes precedence.
 
 Pause and window close request a safe stop after preparation or the current
 chunk. Wait for the worker to finish; forced termination can leave the session
@@ -229,8 +235,8 @@ the installation steps above. For Light or Medium cleanup, also download the
 not needed for microphone recordings.
 
 1. Select your microphone and speech model. Speech starts on CPU; cleanup starts
-   on AUTO (GPU, then CPU). Medium cleanup and Mostly prose are the dictation
-   defaults; Off and Light remain available. Dictation settings are separate from file processing.
+   on AUTO (GPU, then CPU). With its model installed, cleanup starts at Medium;
+   otherwise it starts Off. Dictation uses Mostly prose formatting and saves its own settings.
 2. Choose **Toggle** or **Hold to talk**, enter a shortcut such as
    **Ctrl+Alt+Space**, and tick **Enable global shortcut**. If it is already in
    use, choose another. Disable it before changing its key or mode.
@@ -268,9 +274,8 @@ remain open.
 
 ## Local AI cleanup
 
-Cleanup uses an independent local text model. It is optional and requires the
-`inference` extra already used for real transcription. Download the pinned model
-explicitly into the same library/model root used by the app:
+Cleanup uses an optional local text model. In the desktop, download it through
+**Manage models**. For CLI use, download into the same library/model root:
 
 ```powershell
 $Data = Join-Path $env:LOCALAPPDATA 'audio-transcriber'
@@ -283,9 +288,10 @@ and model memory. No model weights are committed or bundled with the program.
 After downloading, ordinary cleanup uses local files without an API key or
 network connection.
 
-In the desktop, choose **Off**, **Light**, or **Medium** before importing. Light is
-the initial setting. A completed import or resume automatically runs the selected
-cleanup; Off skips cleanup. Set formatting to Off too if the text model is absent. If cleanup fails or its model is missing, the
+In the desktop, choose **Off**, **Light**, or **Medium** before importing. Cleanup
+starts Off when its model is missing. With the model installed, new libraries
+start with Light cleanup and Mostly structured formatting. A completed import or
+resume automatically runs the selected cleanup; Off skips cleanup. If cleanup fails, the
 transcript stays ready and can be exported. Download the model and use **Clean
 selected** to retry or change the level. Cleanup has its own AUTO/CPU/GPU/NPU setting.
 Cleanup is saved in **AI**. When formatting is enabled, the desktop then opens
@@ -520,9 +526,9 @@ the same `--data-dir` and any custom `--model-root`.
 |---|---|
 | `py -3.14` unavailable | Install 64-bit Python 3.14 or make that version available to the Python launcher. |
 | Python module missing | Run from the source folder with its `.venv\Scripts\python.exe`, or use the full executable path. Install the extras shown in the README. |
-| Model not installed | Download the approved model explicitly into the same library/model root used for the job. A speech model and a cleanup model are separate downloads. |
+| Model not installed | Open **Manage models** and download the speech or cleanup model into the selected model folder. |
 | Resume model mismatch | Supply the original `--model`; the CLI default is `whisper-tiny.en-int4-ov`. |
-| Compressed media needs FFmpeg | Follow [FFmpeg setup](#cli-transcription-and-export), choose its executable in the app, or pass `--ffmpeg` in the CLI. |
+| Compressed media needs FFmpeg | Installer builds include it. For source installs, follow [FFmpeg setup](#cli-transcription-and-export) and choose its executable. |
 | WAV normalization error | Use the conversion example in [CLI transcription](#cli-transcription-and-export). |
 | GPU/NPU fails | Try CPU. An explicit device request will not silently switch. |
 | Library already open | Close the other desktop window using that library. |
@@ -530,7 +536,7 @@ the same `--data-dir` and any custom `--model-root`.
 | Cleanup is slow or uses too much RAM | Check [device/resource guidance](#choose-devices-and-manage-resource-use); compilation and a resident 7B model can be costly. |
 | AI text contains unchanged or incorrect passages | Compare with Raw/audio. A rejected block retains its source; passing the checks does not guarantee correct edits. |
 
-For updates, use the [update procedure](#update-an-existing-checkout).
+For installed-app updates, use [Check for updates](#update-the-installed-app).
 For data handling and report sharing, see [Privacy](../PRIVACY.md). Advanced
 evaluation and hardware checks are described in [Testing](../TESTING.md) and
 [Windows validation](../host-validation/README.md).

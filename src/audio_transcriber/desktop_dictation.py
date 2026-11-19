@@ -359,6 +359,8 @@ class DictationWindow(QDialog):
         self.records: list[dict[str, Any]] = []
         self.load_microphones()
         self._load_settings()
+        if not owner.cleanup_available:
+            self.cleanup.setCurrentText("off")
         self._refresh_history()
         self._buttons()
 

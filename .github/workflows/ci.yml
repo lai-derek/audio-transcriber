@@ -20,7 +20,7 @@ jobs:
         include:
           - os: ubuntu-latest
             python: '3.14'
-            pytest-options: '--ignore=tests/test_desktop.py'
+            pytest-options: '--ignore=tests/test_desktop.py --ignore=tests/test_desktop_setup.py'
           - os: windows-latest
             python: '3.14'
             pytest-options: ''
