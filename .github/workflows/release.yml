@@ -1,0 +1,79 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make mingw-w64-ucrt-x86_64-gcc
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev,desktop,inference,bundle]"
+      - name: Check source
+        run: |
+          python -m ruff format --check .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m ruff check .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m mypy src
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pytest -m "not live" --basetemp .pytest-release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prepare decoder source and notices
+        run: |
+          python packaging/prepare_ffmpeg.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python packaging/collect_sources.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build decoder
+        shell: msys2 {0}
+        run: bash packaging/build_ffmpeg.sh
+      - name: Build application and installer
+        run: |
+          python -m PyInstaller --noconfirm packaging/audio-transcriber.spec
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $version = python -c "from audio_transcriber import __version__; print(__version__)"
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is required on the runner.' }
+          & $compiler "/DAppVersion=$version" packaging/audio-transcriber.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m build --no-isolation --outdir dist/release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/check_distributions.py dist/release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python packaging/prepare_release.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: windows-release
+          path: dist/release/*
+          if-no-files-found: error
+      - name: Create draft release for installed-app review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $manifest = Get-Content dist/release/release-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.working_tree_changes.Count -ne 0) { throw 'Release source must be committed.' }
+          $assets = @($manifest.upload_files | ForEach-Object { "dist/release/$_" })
+          gh release create "v$($manifest.version)" @assets --draft --target $env:GITHUB_SHA --title "Audio Transcriber $($manifest.version)" --notes-file packaging/RELEASE_NOTES.md
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

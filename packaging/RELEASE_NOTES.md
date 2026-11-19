@@ -1,28 +1,19 @@
-# Audio Transcriber 0.1.0 — Windows prerelease
+# Audio Transcriber 0.2.0 — Windows x64
 
-Transcribe English audio/video locally, clean up the text, and export transcripts
-or shorter study notes. The Windows app also supports dictation with a
-configurable toggle or hold-to-talk shortcut.
+This release adds graphical model setup and in-app updates. Python and FFmpeg
+are bundled, so installation and ordinary use require no terminal commands.
 
-## Install
+Download `audio-transcriber-0.2.0-windows-x64.exe`, run it, and open the app.
+Choose **Manage models** to download an English speech model. The optional
+cleanup model is a separate download of about 4.5 GB. Cleanup and formatting
+start Off when it is missing; enable them after downloading it.
 
-Download `audio-transcriber-0.1.0-windows-x64.exe` and run it. After setup,
-double-click the Audio Transcriber desktop shortcut. Python and Git are not
-required. Open **Getting started** from the Start menu to download the speech
-model and optional cleanup model. For compressed media, select a separate
-`ffmpeg.exe`. Processing works offline after setup.
+For updates, use **Help → Check for updates → Update and reopen**. Installation
+waits for current work to finish and preserves the library. Automatic update
+checks can be disabled; downloading and installation require your click.
 
-File imports start with Light cleanup and Mostly structured formatting;
-dictation starts with Medium cleanup and Mostly prose. Raw text remains available.
-Speech starts on CPU; cleanup AUTO tries GPU, then CPU. Device measurements and
-reasons for these choices are in [Tested decisions](https://github.com/derek-l8/npu-scribe/blob/main/docs/TESTED_DECISIONS.md).
+The installer is unsigned and Windows may show a publisher warning. This is an
+early Windows x64 release for testers. Review important transcripts and AI text.
 
-The installer is unsigned. This prerelease has been checked on one Windows x64
-computer; microphone recording and insertion into other apps need broader use.
-Review important text because transcription and cleanup can make mistakes.
-Close the app before updating. Reinstalling or uninstalling keeps the library
-and models in your local application-data folder.
-
-`SHA256SUMS.txt` contains the attachment hashes. Qt/PySide (LGPLv3), FFmpeg
-(LGPLv2.1 or later), and other notices are included in the app. Their sources and
-build instructions are in `audio-transcriber-0.1.0-library-sources.zip`.
+`SHA256SUMS.txt` contains attachment checksums. Third-party sources and rebuild
+instructions accompany the installer in `audio-transcriber-0.2.0-library-sources.zip`.

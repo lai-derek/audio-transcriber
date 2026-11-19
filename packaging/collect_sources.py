@@ -92,6 +92,8 @@ def main() -> None:
         output.write(manifest, manifest.name)
         output.write(ROOT / "packaging/LIBRARY_BUILD.md", "LIBRARY_BUILD.md")
         output.write(notice, notice.name)
+        output.write(ROOT / "packaging/build_ffmpeg.sh", "build_ffmpeg.sh")
+        output.write(ROOT / "packaging/prepare_ffmpeg.py", "prepare_ffmpeg.py")
     print(f"Created {bundle.name}: {bundle.stat().st_size} bytes")
 
 

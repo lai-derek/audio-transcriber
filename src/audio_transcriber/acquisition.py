@@ -1,7 +1,7 @@
 """Explicit model acquisition: manifest-approved downloads with staged verification.
 
 Ordinary transcription NEVER touches this module or the network. Downloads happen
-only through `audio-transcriber models download MODEL_ID` or the evaluation harness.
+only through explicit model setup in the GUI, `models download`, or evaluation.
 
 Security policy enforced here:
 - Only manifest-approved model identifiers and HTTPS hosts are allowed.
@@ -18,8 +18,10 @@ import hashlib
 import os
 import shutil
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -355,30 +357,45 @@ def get_spec(model_id: str) -> ModelSpec:
 Fetcher = Callable[[str, Path, int], None]
 
 
-def https_fetcher(max_bytes: int = MAX_MODEL_BYTES) -> Fetcher:
+def https_fetcher(
+    max_bytes: int = MAX_MODEL_BYTES,
+    *,
+    report: Callable[[int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Fetcher:
     def fetch(url: str, destination: Path, expected_size: int) -> None:
         if expected_size > max_bytes:
             raise AcquisitionError("manifest file exceeds the configured size limit")
         if expected_size > 256 * 1024 * 1024:
-            _fetch_ranges(url, destination, expected_size)
+            _fetch_ranges(url, destination, expected_size, report, cancelled)
             return
         limit = expected_size
         received = 0
         # URL is manifest-constructed HTTPS only (see ModelSpec.url_for).
         with (
-            urllib.request.urlopen(url, timeout=120) as response,  # noqa: S310
+            urllib.request.urlopen(url, timeout=20) as response,  # noqa: S310
             destination.open("wb") as out,
         ):
             while chunk := response.read(READ_CHUNK):
+                if cancelled and cancelled():
+                    raise AcquisitionError("Model download cancelled.")
                 received += len(chunk)
                 if received > limit:
                     raise AcquisitionError("download exceeded the expected size limit")
                 out.write(chunk)
+                if report:
+                    report(len(chunk))
 
     return fetch
 
 
-def _fetch_ranges(url: str, destination: Path, expected_size: int) -> None:
+def _fetch_ranges(
+    url: str,
+    destination: Path,
+    expected_size: int,
+    report: Callable[[int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> None:
     """Bound large public-model responses; verify all ranges and the final file.
 
     The model's normal SHA-256/size checks still run before promotion. Range
@@ -389,11 +406,13 @@ def _fetch_ranges(url: str, destination: Path, expected_size: int) -> None:
         output.truncate(expected_size)
 
     def fetch_range(start: int) -> None:
+        if cancelled and cancelled():
+            raise AcquisitionError("Model download cancelled.")
         end = min(start + block, expected_size) - 1
         request = urllib.request.Request(  # noqa: S310 - manifest-constructed HTTPS
             url, headers={"Range": f"bytes={start}-{end}"}
         )
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - manifest HTTPS
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - manifest HTTPS
             expected_range = f"bytes {start}-{end}/{expected_size}"
             if response.status != 206 or response.headers.get("Content-Range") != expected_range:
                 raise AcquisitionError("model server returned an unexpected byte range")
@@ -401,11 +420,15 @@ def _fetch_ranges(url: str, destination: Path, expected_size: int) -> None:
             with destination.open("r+b") as output:
                 output.seek(start)
                 while remaining:
+                    if cancelled and cancelled():
+                        raise AcquisitionError("Model download cancelled.")
                     chunk = response.read(min(READ_CHUNK, remaining))
                     if not chunk:
                         raise AcquisitionError("model download ended before its expected size")
                     output.write(chunk)
                     remaining -= len(chunk)
+                    if report:
+                        report(len(chunk))
                 if response.read(1):
                     raise AcquisitionError("model byte range exceeded its expected size")
 
@@ -439,20 +462,43 @@ def download_model(
     model_id: str,
     models_root: Path,
     fetcher: Fetcher | None = None,
+    *,
+    progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Path:
     """Stage, verify, and atomically promote a manifest-approved model."""
     spec = get_spec(model_id)
     if spec.requires_remote_code:
         raise AcquisitionError("models requiring remote code execution are rejected")
-    existing = verify_installed(models_root, spec)
+    final_dir = models_root / spec.id
+    if final_dir.is_symlink():
+        raise AcquisitionError("The model directory must not be a symbolic link.")
+    try:
+        existing = verify_installed(models_root, spec)
+    except AcquisitionError:
+        existing = None  # Explicit download repairs damaged files after staging a verified copy.
     if existing is not None:
         return existing
-    fetch = fetcher or https_fetcher()
+    received = 0
+    progress_lock = threading.Lock()
+
+    def report(count: int) -> None:
+        nonlocal received
+        with progress_lock:
+            received += count
+            if progress:
+                progress(received, spec.download_bytes)
+
+    fetch = fetcher or https_fetcher(report=report, cancelled=cancelled)
     models_root.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(models_root).free < spec.download_bytes + 64 * 1024**2:
+        raise AcquisitionError("There is not enough free space for this model.")
     stage = Path(tempfile.mkdtemp(prefix=f".stage-{spec.id}-", dir=models_root))
     try:
         expected_names = set()
         for entry in spec.files:
+            if cancelled and cancelled():
+                raise AcquisitionError("Model download cancelled.")
             expected_names.add(entry.name)
             target = stage / entry.name
             fetch(spec.url_for(entry.name), target, entry.size)
@@ -469,8 +515,20 @@ def download_model(
         extras = {p.name for p in stage.iterdir()} - expected_names
         if extras:
             raise AcquisitionError(f"unexpected staged content: {sorted(extras)}")
-        final_dir = models_root / spec.id
-        os.rename(stage, final_dir)
+        if cancelled and cancelled():
+            raise AcquisitionError("Model download cancelled.")
+        previous = None
+        if final_dir.exists():
+            if final_dir.is_symlink() or not final_dir.is_dir():
+                raise AcquisitionError("The model location must be a normal directory.")
+            previous = models_root / f".previous-{spec.id}-{uuid.uuid4().hex}"
+            os.rename(final_dir, previous)
+        try:
+            os.rename(stage, final_dir)
+        except OSError:
+            if previous is not None and not final_dir.exists():
+                os.rename(previous, final_dir)
+            raise
         return final_dir
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)

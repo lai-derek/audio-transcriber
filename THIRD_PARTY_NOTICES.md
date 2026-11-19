@@ -47,3 +47,11 @@ The cleanup manifest pins `OpenVINO/Qwen2.5-7B-Instruct-int4-ov` at revision
 `51f38f02586876c08ca2a604224da20ea61685b8`, derived from Qwen2.5-7B-Instruct
 under Apache-2.0. See the [artifact model card](https://huggingface.co/OpenVINO/Qwen2.5-7B-Instruct-int4-ov)
 and [original model license](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/LICENSE).
+
+## Bundled FFmpeg decoder
+
+Installer builds include a separate FFmpeg 9.0.2 executable for local decoding,
+built under LGPLv2.1 or later with GPL/nonfree features disabled. Its source,
+configuration, and rebuild scripts accompany binary releases in the library-source
+ZIP. See [rebuild instructions](packaging/LIBRARY_BUILD.md#bundled-command-line-decoder).
+This software uses FFmpeg; its source is available with the binary release.

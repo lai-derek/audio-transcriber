@@ -9,28 +9,20 @@ This is an early Windows x64 version; AI cleanup and dictation are experimental.
 
 ## Setup
 
-Use 64-bit Python 3.14 and PowerShell. Follow the
-[installation guide](docs/USER_GUIDE.md#install-on-windows) for downloading the
-project, creating an environment, and installing a speech model.
-AI cleanup and Mixed or Mostly structured formatting use a
-[separate text model](docs/USER_GUIDE.md#local-ai-cleanup), about 4.5 GB to download
-and several GiB of RAM to run. If you skip it, choose **Off** for both cleanup
-and formatting. MP3, M4A, and MP4 require a separate
-[FFmpeg executable](docs/USER_GUIDE.md#cli-transcription-and-export).
+Windows x64 is the supported desktop target. No public installer is published
+yet; use the [source setup](docs/USER_GUIDE.md#install-on-windows) with 64-bit
+Python 3.14, or build the [Windows installer](packaging/README.md).
 
-The Windows installer creates an **Audio Transcriber** desktop shortcut.
-After model setup, double-click it to open the app. For a source installation,
-install and open the desktop app from the project folder:
+Installer builds include Python and FFmpeg. Open the installed app, choose
+**Manage models**, and download an English speech model. AI cleanup is optional
+and uses a separate download of about 4.5 GB. The setup window shows download
+sizes and progress; transcription works offline once the speech model is ready.
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install '.[desktop,inference]'
-if ($LASTEXITCODE -ne 0) { throw 'Desktop installation failed.' }
-.\.venv\Scripts\python.exe -m audio_transcriber.desktop
-```
+Published installers will appear on [GitHub Releases](https://github.com/lai-derek/audio-transcriber/releases).
 
 ## Transcribe a file
 
-1. Select your installed speech model. Use **Choose FFmpeg** for compressed files.
+1. Select your installed speech model. Installer builds include compressed-file support.
 2. Choose cleanup and formatting settings, then press **Import lecture**.
 3. Review the text. **Raw** keeps the original transcript; cleanup and formatting
    are saved separately. **Summarize selected** creates shorter study notes.
@@ -55,8 +47,12 @@ fails, recover the text from the dictation window.
 
 | Workflow | Default cleanup | Default formatting |
 | --- | --- | --- |
-| Imported files | Light | Mostly structured |
-| Dictation | Medium | Mostly prose |
+| Imported files, cleanup model installed | Light | Mostly structured |
+| Dictation, cleanup model installed | Medium | Mostly prose |
+
+Without the cleanup model, imported files start with cleanup and formatting
+**Off**. Dictation starts with cleanup **Off** and Mostly prose formatting.
+Download the model in **Manage models**, then select the settings you want.
 
 Choose **Off**, **Light**, or **Medium** cleanup. Formatting offers **Mostly
 prose**, **Mixed**, and **Mostly structured** layouts. Summaries are a separate
@@ -78,8 +74,10 @@ for configuration and resource limits.
 Recordings, models, transcripts, and exports stay in your local library.
 [Privacy and storage](PRIVACY.md) explains the locations.
 
-The [update guide](docs/USER_GUIDE.md#update-an-existing-checkout) covers Git and
-ZIP installations. Installer updates keep the library and models. See
+Installed apps offer **Help → Check for updates**. Choose **Update and reopen**;
+the app waits for current work to finish, installs, and reopens. The
+[update guide](docs/USER_GUIDE.md#update-the-installed-app) covers this flow and
+[source updates](docs/USER_GUIDE.md#update-an-existing-checkout). Updates keep the library and models. See
 [common problems](docs/USER_GUIDE.md#common-problems) for model, FFmpeg, device,
 and startup errors.
 

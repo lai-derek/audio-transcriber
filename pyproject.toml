@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "audio-transcriber"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local audio transcription and AI text cleanup with OpenVINO"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 license = {file = "LICENSE"}
 dependencies = ["platformdirs==4.12.2"]
 
@@ -29,7 +29,7 @@ include = [
     "/src", "/tests", "/docs", "/packaging", "/scripts", "/host-validation", "/.github",
     "/pyproject.toml", "/README.md", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
     "/DEVELOPMENT.md", "/TESTING.md", "/PRIVACY.md", "/ARCHITECTURE.md",
-    "/REQUIREMENTS.md", "/DECISIONS.md", "/MODEL_EVALUATION.md", "/.gitignore",
+    "/REQUIREMENTS.md", "/DECISIONS.md", "/MODEL_EVALUATION.md", "/.gitignore", "/.gitattributes",
 ]
 
 [tool.ruff]

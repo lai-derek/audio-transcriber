@@ -25,6 +25,10 @@ folder for a repeat when the previous run's files are in use.
   offscreen platform. The CI definition runs these checks on Windows.
 - `test_packaging.py` checks source launchers and selection of the sibling frozen
   worker.
+- `test_updates.py` checks release selection, download limits, checksums,
+  cancellation, free-space errors, and installer restart arguments.
+- `test_desktop_setup.py` checks graphical model download, selection, update
+  failure/retry, waiting for active work, and the cached-helper handoff.
 - `test_distributions.py` checks rejection of runtime files and unsafe archive
   paths. The CI package job also checks actual generated archives.
 - `test_host_validation.py` statically checks the PowerShell harness.
@@ -41,12 +45,36 @@ source v0.1 scope and implemented Windows dictation from the historical plan. Ex
 checks cover path-independent CPU speech and CPU text cleanup on one Windows
 host.
 
-The [current installer checkpoint](host-validation/evidence/2026-10-04/audio-transcriber-checkpoint/README.md)
+The [October 4 installer checkpoint](host-validation/evidence/2026-10-04/audio-transcriber-checkpoint/README.md)
 covers installed model acquisition, CPU speech, GPU cleanup, formatting, exports,
 native review and dictation controls, reinstall, and uninstall on one Windows
 host. Its latest rebuild verifies the lecture and dictation defaults and records
 exact executable hashes. Earlier package checks
 are retained under their original dates.
+
+## November 11 installer and updater checks
+
+On Windows x64 with Python 3.14.10, the offline suite passed 305 tests with one
+Windows symlink-privilege skip and one live test deselected. Ruff and mypy passed.
+The graphical downloader acquired and verified the real tiny speech model and
+selected it for use. Native Windows model setup was visually checked. The frozen
+worker completed CPU transcription of synthetic speech; bundled FFmpeg decoded
+MP3 and AAC-in-MP4 fixtures.
+
+`host-validation/Test-WindowsInstaller.py --check-updater` exercises the independent
+helper, versioned reinstall, and reopening with an isolated installer identity.
+The versioned installer uses the same application payload to check the upgrade
+mechanism. Its logs and generated media stay in ignored `.scratch` storage.
+The complete cycle passed, including native review/export, update/reopen,
+library preservation, and uninstall. The exact compressed candidate installer
+also passed fresh install, verification of all 1,299 payload files, worker launch,
+and uninstall while retaining inside and separate test libraries. A fresh wheel
+environment passed the independent launcher, pause/resume, and export smoke test.
+
+A later reader/publication review added regression coverage for postponing an
+update and repairing damaged models while preserving old files. Its full rerun
+passed 310 tests with one live test deselected. An automatic-cleanup test failed
+once in an earlier run, then passed both an isolated run and the full rerun.
 
 ## Optional live and hardware checks
 
@@ -135,9 +163,9 @@ real desktop import/cleanup/formatting workflow. It also records layout guard,
 cancellation, history, export, and model-reuse checks. Formatting checks enforce
 complete passage coverage. Mixed/Structured can fall back to prose.
 
-The [October 3 PR run](https://github.com/derek-l8/npu-scribe/actions/runs/37163191173)
-passed packaging but failed Linux type checking and Windows test setup. The fixes passed [PR CI](https://github.com/derek-l8/npu-scribe/actions/runs/37164841983)
-and [main CI](https://github.com/derek-l8/npu-scribe/actions/runs/37165069295)
+The [October 3 PR run](https://github.com/lai-derek/audio-transcriber/actions/runs/37163191173)
+passed packaging but failed Linux type checking and Windows test setup. The fixes passed [PR CI](https://github.com/lai-derek/audio-transcriber/actions/runs/37164841983)
+and [main CI](https://github.com/lai-derek/audio-transcriber/actions/runs/37165069295)
 after merge. New dictation changes still need CI after publication. See [development](DEVELOPMENT.md#ci-and-dependencies).
 
 

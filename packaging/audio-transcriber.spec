@@ -19,6 +19,10 @@ tokenizer_bins = collect_dynamic_libs("openvino_tokenizers")
 assets = runpy.run_path(str(root / "packaging" / "bundle_assets.py"))
 notice_data = assets["collect_notices"](root, Path(workpath) / "notices")
 notice_data.append((str(root / "packaging" / "GettingStarted.html"), "help"))
+decoder = root / "build/ffmpeg/ffmpeg.exe"
+if not decoder.is_file():
+    raise RuntimeError("Build the bundled decoder with packaging/build_ffmpeg.sh first.")
+notice_data.append((str(decoder), "ffmpeg"))
 
 
 a = Analysis(
@@ -65,3 +69,16 @@ coll = COLLECT(
     exe, worker_exe, a.binaries, a.datas, worker.binaries, worker.datas,
     name="Audio Transcriber",
 )
+# One-file helper must remain runnable while the onedir application is replaced.
+updater = Analysis(
+    [str(root / "packaging" / "updater_entry.py")],
+    pathex=[str(root / "src")], binaries=[], datas=[], hiddenimports=[],
+)
+updater_pyz = PYZ(updater.pure)
+updater_exe = EXE(
+    updater_pyz, updater.scripts, updater.binaries, updater.datas, [],
+    name="audio-transcriber-updater", console=False,
+)
+import shutil
+shutil.copy2(str(Path(DISTPATH) / "audio-transcriber-updater.exe"),
+             str(Path(DISTPATH) / "Audio Transcriber" / "audio-transcriber-updater.exe"))

@@ -46,7 +46,7 @@ The workflow has read-only repository permissions and uses pinned commits for
 [checkout](https://github.com/actions/checkout) and
 [setup-python](https://github.com/actions/setup-python). Dependabot is configured
 for weekly package/action updates, with OpenVINO and GenAI updates grouped.
-The [recorded main run](https://github.com/derek-l8/npu-scribe/actions/runs/37165069295)
+The [recorded main run](https://github.com/lai-derek/audio-transcriber/actions/runs/37165069295)
 passed on October 3. Local checkpoint changes need a new CI run after publication.
 Keep official actions allowed and workflow commit pins intact. Branch requirements
 must be set in GitHub.
