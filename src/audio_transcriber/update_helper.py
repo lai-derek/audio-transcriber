@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import json
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from .updates import Release, UpdateError, verify_installer, version_tuple
 
@@ -17,9 +17,15 @@ UPDATE_MUTEX = r"Local\AudioTranscriberUpdating-v1"
 
 
 class WindowsMutex:
+    kernel: Any
+    handle: Any
+    owned: bool
+
     def __init__(self, name: str) -> None:
         from ctypes import wintypes
 
+        if sys.platform != "win32":  # Also lets type checks on Linux skip Windows calls.
+            raise OSError("The update runner works only on Windows.")
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
         self.kernel.CreateMutexW.restype = wintypes.HANDLE
@@ -83,6 +89,8 @@ def read_request(path: Path) -> tuple[Release, Path, Path, list[str]]:
 
 
 def message(text: str, retry: bool = False) -> int:
+    if sys.platform != "win32":
+        return 0
     return int(
         ctypes.windll.user32.MessageBoxW(
             None, text, "Audio Transcriber update", 0x10 | (5 if retry else 0)
@@ -91,7 +99,7 @@ def message(text: str, retry: bool = False) -> int:
 
 
 def main() -> int:
-    if os.name != "nt" or len(sys.argv) != 2:
+    if sys.platform != "win32" or len(sys.argv) != 2:
         return 2
     request = Path(sys.argv[1]).resolve()
     update_lock = WindowsMutex(UPDATE_MUTEX)
