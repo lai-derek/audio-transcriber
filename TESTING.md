@@ -163,9 +163,9 @@ real desktop import/cleanup/formatting workflow. It also records layout guard,
 cancellation, history, export, and model-reuse checks. Formatting checks enforce
 complete passage coverage. Mixed/Structured can fall back to prose.
 
-The [October 3 PR run](https://github.com/derek-l8/npu-scribe/actions/runs/37163191173)
-passed packaging but failed Linux type checking and Windows test setup. The fixes passed [PR CI](https://github.com/derek-l8/npu-scribe/actions/runs/37164841983)
-and [main CI](https://github.com/derek-l8/npu-scribe/actions/runs/37165069295)
+The [October 3 PR run](https://github.com/lai-derek/audio-transcriber/actions/runs/37163191173)
+passed packaging but failed Linux type checking and Windows test setup. The fixes passed [PR CI](https://github.com/lai-derek/audio-transcriber/actions/runs/37164841983)
+and [main CI](https://github.com/lai-derek/audio-transcriber/actions/runs/37165069295)
 after merge. New dictation changes still need CI after publication. See [development](DEVELOPMENT.md#ci-and-dependencies).
 
 

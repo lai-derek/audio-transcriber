@@ -10,7 +10,7 @@ variables used by the example. Ordinary transcription and cleanup are offline af
 Installer builds target Windows x64 and include Python, the desktop app, and
 FFmpeg for compressed audio/video. A public binary has not been published yet;
 the [source route](#install-on-windows) is available now. Once published,
-download the Windows `.exe` from [GitHub Releases](https://github.com/derek-l8/audio-transcriber/releases).
+download the Windows `.exe` from [GitHub Releases](https://github.com/lai-derek/audio-transcriber/releases).
 
 1. Run the installer. It installs for your user without administrator access and
    offers a desktop shortcut. Launch at sign-in is optional and starts unchecked.
@@ -75,7 +75,7 @@ locally tested target.
        $Projects = Join-Path $env:USERPROFILE 'Projects'
        New-Item -ItemType Directory -Force -Path $Projects -ErrorAction Stop | Out-Null
        Set-Location $Projects -ErrorAction Stop
-       git clone https://github.com/derek-l8/audio-transcriber.git audio-transcriber
+       git clone https://github.com/lai-derek/audio-transcriber.git audio-transcriber
        if ($LASTEXITCODE -ne 0) { throw 'Clone failed; stop here.' }
        Set-Location audio-transcriber -ErrorAction Stop
    }

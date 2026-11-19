@@ -18,7 +18,7 @@ Installer builds include Python and FFmpeg. Open the installed app, choose
 and uses a separate download of about 4.5 GB. The setup window shows download
 sizes and progress; transcription works offline once the speech model is ready.
 
-Published installers will appear on [GitHub Releases](https://github.com/derek-l8/audio-transcriber/releases).
+Published installers will appear on [GitHub Releases](https://github.com/lai-derek/audio-transcriber/releases).
 
 ## Transcribe a file
 

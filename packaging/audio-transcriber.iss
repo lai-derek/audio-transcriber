@@ -24,10 +24,10 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=derek-l8
-AppPublisherURL=https://github.com/derek-l8/audio-transcriber
-AppSupportURL=https://github.com/derek-l8/audio-transcriber/issues
-AppUpdatesURL=https://github.com/derek-l8/audio-transcriber/releases
+AppPublisher=lai-derek
+AppPublisherURL=https://github.com/lai-derek/audio-transcriber
+AppSupportURL=https://github.com/lai-derek/audio-transcriber/issues
+AppUpdatesURL=https://github.com/lai-derek/audio-transcriber/releases
 AppMutex=Local\AudioTranscriberRunning-v1
 CloseApplications=no
 RestartApplications=no

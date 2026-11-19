@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-REPOSITORY = "derek-l8/audio-transcriber"
+REPOSITORY = "lai-derek/audio-transcriber"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
 LATEST_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 MAX_INSTALLER_BYTES = 2 * 1024**3
