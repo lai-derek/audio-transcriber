@@ -41,6 +41,24 @@ def test_only_newer_complete_stable_release():
     assert updates.parse_release(value, "0.2.0") is None
 
 
+def test_update_check_and_asset_validation_use_the_renamed_repository(monkeypatch):
+    requested = []
+    value = payload()
+    value["assets"][0]["browser_download_url"] = (
+        "https://github.com/lai-derek/audio-transcriber/releases/download/v0.2.1/"
+        "audio-transcriber-0.2.1-windows-x64.exe"
+    )
+
+    def renamed_release(url):
+        requested.append(url)
+        return io.BytesIO(json.dumps(value).encode())
+
+    monkeypatch.setattr(updates, "open_url", renamed_release)
+    release = updates.latest_release("0.2.0")
+    assert requested == ["https://api.github.com/repos/lai-derek/audio-transcriber/releases/latest"]
+    assert release is not None and release.url == value["assets"][0]["browser_download_url"]
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

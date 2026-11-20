@@ -74,7 +74,7 @@ With an existing approved speech/cleanup model folder and a short recording:
 .\.venv\Scripts\python.exe host-validation/Test-WindowsInstaller.py --compiler 'C:\Tools\Inno Setup\ISCC.exe' --bundle 'dist/Audio Transcriber' --validation-dir .scratch/installer-check-01 --media 'C:\Lectures\clip.m4a' --model-root 'C:\Models\audio-transcriber' --ffmpeg 'C:\Tools\ffmpeg\bin\ffmpeg.exe' --check-cleanup --download-model
 ```
 
-`--check-cleanup` checks automatic Light cleanup, Mostly structured formatting, and exports.
+`--check-cleanup` checks automatic cleanup, formatting, and exports.
 The installed GUI also checks fresh lecture and dictation defaults.
 `--download-model` checks a fresh tiny-model download through the installed worker.
 `--check-updater` uses the independent updater helper for the versioned reinstall,

@@ -10,6 +10,11 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 
+# Wheels without a license file of their own, and the package whose license covers them.
+# sherpa-onnx-core holds the sherpa-onnx DLLs; ONNX Runtime's MIT license is in
+# packaging/licenses/.
+COVERED_BY = {"sherpa-onnx-core": "sherpa-onnx"}
+
 
 def collect_notices(root: Path, output: Path) -> list[tuple[str, str]]:
     source_notices = root / "build/source-materials/qt-third-party-notices.txt"
@@ -32,7 +37,14 @@ def collect_notices(root: Path, output: Path) -> list[tuple[str, str]]:
     output.mkdir(parents=True, exist_ok=True)
     files: list[tuple[str, str]] = []
     inventory = []
-    pending = ["platformdirs", "PySide6", "openvino", "openvino-genai", "pyinstaller"]
+    pending = [
+        "platformdirs",
+        "PySide6",
+        "openvino",
+        "openvino-genai",
+        "sherpa-onnx",
+        "pyinstaller",
+    ]
     visited = set()
     while pending:
         dist = distribution(pending.pop())
@@ -60,9 +72,12 @@ def collect_notices(root: Path, output: Path) -> list[tuple[str, str]]:
                     "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 }
             )
-        if not copied:
+        if not copied and key not in COVERED_BY:
             raise RuntimeError(f"No runtime notices found for {name}")
-        inventory.append({"package": name, "version": dist.version, "notices": copied})
+        entry = {"package": name, "version": dist.version, "notices": copied}
+        if not copied:
+            entry["covered_by"] = COVERED_BY[key]
+        inventory.append(entry)
         for dependency in () if key == "pyinstaller" else dist.requires or ():
             requirement = Requirement(dependency)
             if requirement.marker is None or requirement.marker.evaluate({"extra": ""}):

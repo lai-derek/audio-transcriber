@@ -11,6 +11,8 @@ The default library is `%LOCALAPPDATA%\audio-transcriber` on Windows. Override i
 The app copies imported recordings into the library and retains transcripts,
 manual-edit revisions, AI cleanup history, settings, checkpoints, and exports there.
 Cleanup compilation caches are stored under `cache/cleanup` in the library.
+Selected models remain loaded in memory while the app is open, including when
+minimized. Exiting stops the model worker and releases that memory.
 
 Choose a folder outside the repository. The app does not prevent an override
 from pointing into Git or a synced directory, and it does not yet warn about
@@ -65,7 +67,11 @@ Review these diagnostics before sharing. Host validation tools sanitize their
 published reports, but inspect any report for private paths, audio, transcripts,
 and credentials before copying it into Git or an issue.
 
-There is no in-app session deletion yet. Close the desktop and ensure its worker
-has stopped before managing or backing up library files. Removing a session
-folder removes its preserved recording, transcripts, edit history, and internal
-exports; exported copies elsewhere remain separate.
+Right-click a lecture and choose **Delete** to move its recording, transcripts,
+edits, and internal exports into **File → Trash**. It can be restored for 30 days;
+expired items are removed when the app starts. **Empty Trash** permanently
+removes the deleted lectures immediately. Exported copies elsewhere remain separate.
+
+Close the desktop and ensure its worker has stopped before manually managing or
+backing up library files. Uninstalling keeps the library, including recordings,
+models, dictation history, and Trash.

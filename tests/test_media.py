@@ -149,16 +149,15 @@ def test_decoder_discovers_local_ffmpeg_without_saved_paths(tmp_path, monkeypatc
         "audio_transcriber.media.shutil.which",
         lambda name: executable if name == "ffmpeg" else None,
     )
-    assert select_decoder(".mp4", None).ffmpeg_path == executable
+    assert select_decoder(Path("lecture.mp4"), None).ffmpeg_path == executable
     # Explicit configuration takes precedence even if it no longer exists.
     explicit = str(tmp_path / "missing.exe")
-    decoder = select_decoder(".mp4", explicit)
+    decoder = select_decoder(Path("lecture.mp4"), explicit)
     assert decoder.ffmpeg_path == explicit
     source = tmp_path / "lecture.mp4"
     source.write_bytes(b"synthetic media")
     with pytest.raises(MediaError, match="not found"):
         decoder.decode(source)
-    assert isinstance(select_decoder(".wav", None), PcmWavDecoder)
 
 
 def test_decoder_missing_ffmpeg_explains_setup(monkeypatch):
@@ -166,4 +165,62 @@ def test_decoder_missing_ffmpeg_explains_setup(monkeypatch):
 
     monkeypatch.setattr("audio_transcriber.media.shutil.which", lambda name: None)
     with pytest.raises(MediaError, match="install it on PATH"):
-        select_decoder(".mp3", None)
+        select_decoder(Path("lecture.mp3"), None)
+
+
+def write_test_wav(path: Path, channels: int, rate: int, width: int) -> Path:
+    import wave
+
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(channels)
+        handle.setsampwidth(width)
+        handle.setframerate(rate)
+        handle.writeframes(b"\0" * (channels * width * rate // 10))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("channels", "rate", "width", "direct"),
+    [
+        (1, 16_000, 2, True),  # Already normalized.
+        (1, 16_000, 4, True),
+        (2, 44_100, 2, False),  # Phone or recorder stereo.
+        (2, 48_000, 3, False),  # 24-bit studio export.
+        (1, 16_000, 3, False),  # Right rate, but the reader has no 24-bit path.
+        (1, 8_000, 2, False),
+    ],
+)
+def test_only_normalized_wav_skips_ffmpeg(tmp_path, monkeypatch, channels, rate, width, direct):
+    from audio_transcriber.media import wav_needs_conversion
+    from audio_transcriber.pipeline import select_decoder
+
+    monkeypatch.setattr("audio_transcriber.media.shutil.which", lambda name: "ffmpeg.exe")
+    source = write_test_wav(tmp_path / "clip.wav", channels, rate, width)
+    assert wav_needs_conversion(source) is not direct
+    decoder = select_decoder(source, None)
+    assert isinstance(decoder, PcmWavDecoder if direct else FFmpegDecoder)
+
+
+def test_floating_point_wav_goes_to_ffmpeg(tmp_path):
+    import struct
+
+    from audio_transcriber.media import wav_needs_conversion
+
+    # A minimal IEEE float WAV (format 3), which Python's wave module cannot read.
+    data = b"\0" * 8
+    header = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
+    header += struct.pack("<IHHIIHH", 16, 3, 2, 48_000, 48_000 * 8, 8, 32)
+    source = tmp_path / "float.wav"
+    source.write_bytes(header + b"data" + struct.pack("<I", len(data)) + data)
+    assert wav_needs_conversion(source)
+
+
+def test_wav_without_ffmpeg_says_why(tmp_path, monkeypatch):
+    from audio_transcriber.pipeline import select_decoder
+
+    monkeypatch.setattr("audio_transcriber.media.shutil.which", lambda name: None)
+    stereo = write_test_wav(tmp_path / "phone.wav", 2, 44_100, 2)
+    with pytest.raises(MediaError, match="not mono 16 kHz.*install it on PATH"):
+        select_decoder(stereo, None)
+    normalized = write_test_wav(tmp_path / "ready.wav", 1, 16_000, 2)
+    assert isinstance(select_decoder(normalized, None), PcmWavDecoder)

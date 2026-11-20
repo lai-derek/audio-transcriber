@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PROCESSING_DEFAULTS = {
-    "lecture": ("light", "structured"),
+    "lecture": ("medium", "mixed"),
     "dictation": ("medium", "prose"),
 }
 

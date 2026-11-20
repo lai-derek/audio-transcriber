@@ -145,7 +145,7 @@ def main() -> None:
     for layer in ("Raw", "Balanced"):
         window.layer.setCurrentText(layer)
         for fmt in ("text", "markdown", "srt", "json"):
-            window.export_format.setCurrentText(fmt)
+            window.export_format.setCurrentIndex(window.export_format.findData(fmt))
             destination = args.data_dir / f"smoke.{layer.lower()}.{fmt}"
             QFileDialog.getSaveFileName = lambda *a, dest=destination: (str(dest), "")
             window.choose_export()

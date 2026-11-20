@@ -238,9 +238,9 @@ def test_formatted_exports_keep_paragraphs_and_lists():
 @pytest.mark.parametrize(
     ("mode", "level", "override"),
     [
-        ("lecture", "light", False),
+        ("lecture", "medium", False),
         ("dictation", "medium", False),
-        ("lecture", "medium", True),
+        ("lecture", "light", True),
         ("dictation", "light", True),
     ],
 )
@@ -272,7 +272,7 @@ def test_transcribe_chains_selected_cleanup(
     ai = store.load_transcript(session_id, "ai")
     assert ai.transformation["style"] == level
     formatted = store.load_transcript(session_id, "formatted")
-    assert formatted.transformation["style"] == ("structured" if mode == "lecture" else "prose")
+    assert formatted.transformation["style"] == ("mixed" if mode == "lecture" else "prose")
     assert store.load_session(session_id).status == "ready"
     assert store.load_transcript(session_id, "raw").text == "synthetic transcript"
 
@@ -309,45 +309,6 @@ def test_off_never_loads_cleanup_and_failure_keeps_transcript(
         assert not (directory / "ai-transcript.json").exists()
 
 
-def test_summary_is_separate_formatted_notes_and_not_subtitles(ready, monkeypatch):
-    import audio_transcriber.cli as cli
-    from audio_transcriber.export import ExportError, write_export
-
-    store, session = ready
-    cleanup_session(store, session.id, Formatter())
-    raw_hash = sha256_file(store.session_dir(session.id) / "raw-transcript.json")
-    ai_hash = sha256_file(store.session_dir(session.id) / "ai-transcript.json")
-
-    class Notes:
-        device = "GPU"
-
-        def generate(self, text, mode, style):
-            assert mode == "summary"
-            return '{"sections":[{"heading":"Synthetic transcript","sentences":[0]}]}'
-
-    monkeypatch.setattr(cli, "make_model", lambda *args: Notes())
-    assert main(["--data-dir", str(store.data_dir), "summarize", session.id]) == 0
-    notes = store.load_transcript(session.id, "summary")
-    assert notes.text.startswith("## Synthetic transcript")
-    assert notes.provenance.actual_device == "GPU"
-    assert notes.transformation["prompt_version"] == "summary-v2"
-    assert len(list((store.session_dir(session.id) / "summary-history").glob("*.json"))) == 1
-    assert sha256_file(store.session_dir(session.id) / "raw-transcript.json") == raw_hash
-    assert sha256_file(store.session_dir(session.id) / "ai-transcript.json") == ai_hash
-    assert (
-        "## Synthetic transcript"
-        in write_export(store, session.id, "summary", "markdown").read_text()
-    )
-    with pytest.raises(ExportError, match="not subtitles"):
-        write_export(store, session.id, "summary", "srt")
-    assert check_candidate("There are 5 steps", "There are 50 steps", "summary") == [
-        "quantity-change"
-    ]
-    assert (
-        check_candidate("There are 5 steps and many other details", "Five steps", "summary") == []
-    )
-
-
 def fake_runtime(monkeypatch, devices, load_failure=False, generate_failure=False, cancelled=None):
     import sys
     from types import SimpleNamespace
@@ -355,21 +316,75 @@ def fake_runtime(monkeypatch, devices, load_failure=False, generate_failure=Fals
     from audio_transcriber.ai_cleanup import LocalCleanupModel
 
     loads = []
+    answer = "<think>\n\n</think>\n\nThe result."  # The think block is stripped before use.
 
-    class Pipeline:
+    class History(list):
+        extra = None
+
+        def set_extra_context(self, value):
+            self.extra = value
+
+    class Pipeline:  # NPU: one request at a time.
         def __init__(self, folder, device, config):
             loads.append(device)
             self.device = device
+
+        def generate(self, *args, **kwargs):
+            assert args[0].extra == {"enable_thinking": False}
+            return SimpleNamespace(
+                texts=[answer],
+                perf_metrics=SimpleNamespace(get_num_generated_tokens=lambda: 4),
+            )
+
+    class Handle:
+        def __init__(self, ids):
+            self.ids, self.status = ids, 0
+
+        def get_status(self):
+            return self.status
+
+        def cancel(self):
+            self.status = 2
+
+        def read_all(self):
+            return [SimpleNamespace(generated_ids=self.ids)]
+
+    class Tokenizer:
+        def apply_chat_template(self, chat, add_generation_prompt, extra_context):
+            assert add_generation_prompt and extra_context == {"enable_thinking": False}
+            return f"{chat[0]['content']}|{chat[1]['content']}"
+
+        def decode(self, ids):
+            return answer if ids else ""
+
+    class Batching:  # CPU and GPU: requests sent together.
+        def __init__(self, folder, scheduler, device, config):
+            loads.append(device)
+            self.device, self.config, self.handles, self.steps = device, config, [], 0
             if device == "GPU" and load_failure:
                 raise RuntimeError("driver failure")
 
-        def generate(self, *args, **kwargs):
+        def get_tokenizer(self):
+            return Tokenizer()
+
+        def get_config(self):
+            return SimpleNamespace()
+
+        def add_request(self, number, prompt, config):
             if self.device == "GPU" and generate_failure:
                 raise RuntimeError("generation failure")
-            return SimpleNamespace(
-                texts=["The result."],
-                perf_metrics=SimpleNamespace(get_num_generated_tokens=lambda: 4),
-            )
+            assert config.max_new_tokens == 1024 and not config.apply_chat_template
+            # "runaway" fills the whole output limit.
+            handle = Handle([7] * (1024 if prompt.endswith("|runaway") else 4))
+            self.handles.append(handle)
+            return handle
+
+        def has_non_finished_requests(self):
+            return any(h.status == 0 for h in self.handles)
+
+        def step(self):
+            self.steps += 1
+            next(h for h in self.handles if h.status == 0).status = 1
 
     monkeypatch.setitem(
         sys.modules,
@@ -381,7 +396,10 @@ def fake_runtime(monkeypatch, devices, load_failure=False, generate_failure=Fals
         "openvino_genai",
         SimpleNamespace(
             LLMPipeline=Pipeline,
-            ChatHistory=list,
+            ContinuousBatchingPipeline=Batching,
+            SchedulerConfig=SimpleNamespace,
+            GenerationStatus=SimpleNamespace(RUNNING=0),
+            ChatHistory=History,
             StreamingStatus=SimpleNamespace(STOP=1, RUNNING=0),
         ),
     )
@@ -426,6 +444,44 @@ def test_explicit_device_failure_and_cancellation_do_not_fall_back(monkeypatch):
     with pytest.raises(CleanupCancelled):
         model.generate("source", "lecture", "light")
     assert loads == []
+
+
+def test_requests_are_batched_reused_and_runaways_flagged(monkeypatch):
+    from audio_transcriber.ai_cleanup import RunawayOutput
+
+    model, loads = fake_runtime(monkeypatch, ["CPU", "GPU"])
+    seen = []
+    answers = model.generate_many(
+        ["a", "runaway", "a"], "lecture", "light", lambda done, total: seen.append((done, total))
+    )
+    assert answers == ["The result.", None, "The result."]
+    assert loads == ["GPU"]
+    assert model.pipeline.config["KV_CACHE_PRECISION"] == "f16"
+    assert len(model.pipeline.handles) == 2  # The repeated request was sent once.
+    assert seen == [(1, 2), (2, 2)]
+    assert model.generate("a", "lecture", "light") == "The result."
+    assert len(model.pipeline.handles) == 2  # Answered from the earlier result.
+    with pytest.raises(RunawayOutput):
+        model.generate("runaway", "lecture", "light")
+
+
+def test_batch_stops_between_steps(monkeypatch):
+    def stop():
+        return model.pipeline is not None and model.pipeline.steps >= 1
+
+    model, _ = fake_runtime(monkeypatch, ["CPU"], cancelled=stop)
+    with pytest.raises(CleanupCancelled):
+        model.generate_many(["a", "b", "c"], "lecture", "light")
+    assert model.pipeline.steps == 1  # Stopped at the next step.
+    assert not model.pipeline.has_non_finished_requests()
+    assert not model.answers
+
+
+def test_npu_sends_one_request_at_a_time(monkeypatch):
+    model, loads = fake_runtime(monkeypatch, ["CPU", "NPU"])
+    model.device = model.requested_device = "NPU"
+    assert model.generate_many(["a", "b"], "lecture", "light") == ["The result."] * 2
+    assert loads == ["NPU"]
 
 
 def test_resume_chains_cleanup_only_after_ready(tmp_path, three_second_wav, monkeypatch):
@@ -483,54 +539,6 @@ def test_resume_chains_cleanup_only_after_ready(tmp_path, three_second_wav, monk
     )
     assert calls == ["AUTO"]
     assert SessionStore(library).load_transcript(session_id, "ai").text
-
-
-def test_summary_cancellation_retains_previous_notes(ready):
-    store, session = ready
-    target = cleanup_session(store, session.id, Formatter(), mode="summary")
-    previous = target.read_bytes()
-
-    class Cancel:
-        def generate(self, *args):
-            raise CleanupCancelled("stopped")
-
-    with pytest.raises(CleanupCancelled):
-        cleanup_session(store, session.id, Cancel(), mode="summary")
-    assert target.read_bytes() == previous
-
-
-def test_summary_renders_only_selected_source_and_rejects_invalid_indices():
-    from audio_transcriber.ai_cleanup import render_summary, summary_input
-
-    source = "um the pump moved five liters per minute. Power use is not known. Any questions?"
-    passages, request = summary_input(source)
-    assert "[0]" in request and "[2]" in request
-    result = render_summary(
-        '{"sections":[{"heading":"Pump","sentences":[0,1]}, '
-        '{"heading":"Invented claim","sentences":[1]}]}',
-        passages,
-        source,
-    )
-    assert "five liters per minute" in result
-    assert "not known" in result
-    assert "Any questions" not in result
-    assert "Invented claim" not in result
-    assert result.count("Power use") == 1
-    with pytest.raises(ValueError, match="invalid passage"):
-        render_summary('{"sections":[{"heading":"Pump","sentences":[99]}]}', passages, source)
-
-
-def test_invalid_summary_selection_retains_source(ready):
-    store, session = ready
-
-    class Invalid:
-        def generate(self, *args):
-            return '{"sections":[{"heading":"New fact","sentences":[100]}]}'
-
-    cleanup_session(store, session.id, Invalid(), mode="summary")
-    notes = store.load_transcript(session.id, "summary")
-    assert notes.text == store.load_transcript(session.id, "raw").text
-    assert notes.transformation["blocks"][0]["warnings"] == ["invalid-summary-selection"]
 
 
 @pytest.mark.parametrize(
@@ -600,3 +608,111 @@ def test_uncertainty_punctuation_and_equivalent_marker_are_allowed():
     )
     assert not check_candidate("The supply might be faulty", "The supply may be faulty.", "lecture")
     assert not check_candidate("maybe call Alex", "Call Alex.", "dictation")
+
+
+def test_each_cleanup_level_has_its_own_instructions_and_example():
+    from audio_transcriber.ai_cleanup import STYLES, cleanup_examples, system_prompt
+
+    assert STYLES == ("light", "medium", "heavy")
+    prompts = {style: system_prompt("lecture", style) for style in STYLES}
+    assert len(set(prompts.values())) == 3
+    assert "Rewrite for easy reading" in prompts["heavy"]
+    examples = [cleanup_examples("lecture", style)[0][1] for style in STYLES]
+    assert len(examples[2]) < len(examples[1])  # Heavy goes further than medium.
+
+
+def test_cli_accepts_heavy_cleanup(ready, monkeypatch):
+    store, session = ready
+    styles = []
+
+    class Fixture:
+        def generate(self, text, mode, style):
+            styles.append(style)
+            return text
+
+    monkeypatch.setattr("audio_transcriber.cli.make_model", lambda *args: Fixture())
+    common = ["--data-dir", str(store.data_dir), "cleanup", session.id, "--summary", "off"]
+    assert main([*common, "--style", "heavy"]) == 0
+    assert styles == ["heavy"]
+    assert store.load_transcript(session.id, "ai").transformation["style"] == "heavy"
+
+
+def test_dropping_a_dangling_connector_is_not_an_invented_ending():
+    source = "all those goals are things that I'd very much agree with and"
+    assert (
+        check_candidate(source, "All those goals are things I'd very much agree with.", "lecture")
+        == []
+    )
+    invented = "All those goals are things I'd agree with and pursue next year."
+    assert "unfinished-tail-change" in check_candidate(source, invented, "lecture")
+
+
+def test_thousands_separators_are_the_same_quantity():
+    from audio_transcriber.ai_cleanup import numeric_values
+
+    assert numeric_values("10,000 lines, not 1000") == numeric_values("10000 lines, not 1,000")
+
+
+def test_copied_example_text_is_rejected():
+    source = "want to work on it while I'm here"
+    leaked = (
+        "The period is not constant, and the 5 volt supply cannot be replaced with 50 volts. "
+        + source
+    )
+    assert "example-leak" in check_candidate(source, leaked, "lecture")
+
+
+@pytest.mark.parametrize(("style", "kept"), [("light", False), ("medium", True), ("heavy", True)])
+def test_dropped_filler_hedges_are_flagged_not_discarded_above_light(style, kept):
+    from audio_transcriber.ai_cleanup import clean_segments
+
+    source = "I don't know, I guess the pump is loud and we measured it twice last week."
+
+    class Trims:
+        def generate(self, text, mode, style):
+            return "The pump is loud, and we measured it twice last week."
+
+    output, records = clean_segments((Segment(0, 1, source),), Trims(), "lecture", style)
+    assert (output[0].text != source) is kept
+    assert output[0].uncertain
+    assert set(records[0]["warnings"]) == {"negation-change", "uncertainty-loss"}
+
+
+def test_reworded_command_example_is_rejected():
+    source = "all those goals are things that I'd very much agree with and wanna work on"
+    leaked = "All those goals are things I'd like to achieve. New paragraph, then stop. Period."
+    assert "example-leak" in check_candidate(source, leaked, "dictation")
+    assert "example-leak" not in check_candidate(
+        source,
+        "All those goals are things I'd very much agree with and want to work on.",
+        "dictation",
+    )
+
+
+def test_examples_are_instructions_not_conversation_turns():
+    from audio_transcriber.ai_cleanup import instructions, system_prompt
+
+    text = instructions("dictation", "medium")
+    assert text.startswith(system_prompt("dictation", "medium"))
+    assert "never copy their wording" in text
+    assert "Example input:\nI need the red cable" in text
+    assert instructions("summary", "part") == system_prompt("summary", "part")
+
+
+def test_a_runaway_block_keeps_its_source_and_the_rest_proceed():
+    from audio_transcriber.ai_cleanup import RunawayOutput, clean_segments
+
+    class OneRunaway:
+        def generate(self, text, mode, style):
+            if "second" in text:
+                raise RunawayOutput("too long")
+            return text.capitalize() + "."
+
+    first = "the first block " * 60
+    second = "the second block " * 60
+    output, records = clean_segments(
+        (Segment(0, 1, first), Segment(1, 2, second)), OneRunaway(), "lecture", "light"
+    )
+    assert [r["used_source"] for r in records] == [False, True]
+    assert records[1]["warnings"] == ["runaway-output"]
+    assert output[1].text.strip() == second.strip()

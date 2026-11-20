@@ -5,17 +5,36 @@
 <h1>Getting started</h1>
 <ol>
 <li>Open <strong>Audio Transcriber</strong> from its desktop shortcut or the Start menu.</li>
-<li>In <strong>Manage models</strong>, download the recommended English speech model.
-The smaller speech model is available for a quicker first test. The window shows size and progress;
-you can cancel and retry.</li>
-<li>Close setup, select your speech model, and choose <strong>Import lecture</strong>.</li>
-<li>Review the transcript and choose <strong>Export</strong> to save text, Markdown, JSON, or subtitles.</li>
+<li>On first launch the app downloads every model: the English speech models first
+(Parakeet v2, the recommended one, then Whisper Small and Whisper Base), then the AI
+cleanup model (about 4.5 GB). <strong>Manage models</strong> shows progress; you can close it
+and downloads continue. An interrupted download continues where it left off.</li>
+<li>Once a speech model is ready, choose <strong>Import audio</strong>, or drag audio files onto the window.</li>
+<li>Read the result, then use <strong>Copy all</strong> or <strong>Export</strong> to save text, Markdown, subtitles, or data.</li>
 </ol>
 <p>Python, Git, and a separate FFmpeg installation are unnecessary. MP3, M4A, and MP4 decoding is included.</p>
-<h2>Optional AI cleanup</h2>
-<p>Download the optional cleanup model in <strong>Manage models</strong> (about 4.5 GB).
-Then choose Light or Medium cleanup and your formatting style. Cleanup and formatting begin Off
-when the model is missing. Transcription works without it. Review AI text against Raw and the audio.</p>
+<h2>Reading and correcting</h2>
+<p>Each lecture opens on its most finished version. The tabs above the text switch between
+<strong>Original</strong> (speech recognition output), <strong>Transcript</strong> (tidied by the AI),
+<strong>Notes</strong>, and <strong>Summary</strong>. On Original, click a line to move the audio there;
+<strong>Ctrl+Space</strong> plays and pauses.</p>
+<p>Type in any tab to correct it; changes save on their own. Corrections to Original are saved in
+an <strong>Edited</strong> tab. On AI versions, <strong>Undo my edits</strong> brings back
+the AI's version. <strong>Ctrl + mouse wheel</strong> changes the text size.</p>
+<h2>AI cleanup</h2>
+<p>When the cleanup model finishes downloading, Medium cleanup and Mixed formatting
+turn on. The <strong>Lecture | Dictation</strong> switch next to Import audio sets how recordings are cleaned;
+flipping it re-cleans the selected lecture. <strong>Clean up</strong> and <strong>Format</strong> switch a lecture
+to another level or style (the style applies to Notes and Summary);
+the other note and summary styles are prepared in the background, so those switches are instant.
+Settings for new imports, models, and devices are under <strong>Settings</strong>.
+Transcription works without the cleanup model. Check AI text against the Original tab and the audio.</p>
+<p>Selected models stay loaded while the app is open, including when minimized. Closing the app
+releases their memory. AI cleanup needs several GiB of RAM. Choose what is prepared under
+<strong>Settings → Prepare in the background</strong>, or turn it all off to reduce background work.</p>
+<h2>Managing lectures</h2>
+<p>Right-click a lecture to rename, export, or delete it. Deleted lectures stay in
+<strong>File → Trash</strong> for 30 days, where they can be restored.</p>
 <h2>Updates</h2>
 <p>Open <strong>Help → Check for updates</strong>, or wait for an update notification.
 Choose <strong>Update and reopen</strong>. The app downloads the update and waits for current work

@@ -445,7 +445,8 @@ def test_balanced_layer_deterministic_and_raw_immutable(
     assert balanced["segments"][0]["text"].startswith("So the value")
 
 
-def test_unsupported_media_requires_ffmpeg(tmp_path: Path) -> None:
+def test_unsupported_media_requires_ffmpeg(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("audio_transcriber.media.shutil.which", lambda _name: None)
     store = SessionStore(tmp_path / "data")
     source = tmp_path / "clip.m4a"
     source.write_bytes(b"payload")
@@ -459,3 +460,20 @@ def test_ffmpeg_decoded_source_flows_through_pipeline(tmp_path: Path, stub_media
     source.write_bytes(b"payload")
     session = make_runner(store, ffmpeg_path=stub_media).run_new(source)
     assert session.status == "ready"
+
+
+def test_phone_style_wav_is_converted_with_ffmpeg(tmp_path: Path, stub_media: str) -> None:
+    import wave
+
+    source = tmp_path / "phone.wav"
+    with wave.open(str(source), "wb") as handle:  # Stereo 44.1 kHz, as phones record.
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(44_100)
+        handle.writeframes(b"\0\0\0\0" * 44_100)
+    original = source.read_bytes()
+    store = SessionStore(tmp_path / "data")
+    session = make_runner(store, ffmpeg_path=stub_media).run_new(source)
+    assert session.status == "ready"
+    assert session.diagnostics["decoder_identity"] == "ffmpeg-adapter-v1"
+    assert store.source_copy(session.id).read_bytes() == original  # Kept as recorded.

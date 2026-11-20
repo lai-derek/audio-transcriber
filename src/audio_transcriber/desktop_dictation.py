@@ -25,7 +25,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices, QtAudio
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,10 +43,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .acquisition import MANIFEST
+from .acquisition import MANIFEST, cpu_only
 from .ai_cleanup import DEFAULT_MODEL
 from .config import PROCESSING_DEFAULTS
-from .desktop import worker_command
+from .desktop_setup import (
+    AI_DEVICES,
+    CLEANUP_LEVELS,
+    CPU_ONLY_HINT,
+    DEVICE_HINT,
+    SPEECH_DEVICES,
+    add_choices,
+    choice,
+    model_choice,
+    select,
+)
 from .dictation import MAX_SECONDS, DictationHistory, Hotkey, normalize_capture, parse_hotkey
 from .insertion import FocusTarget
 from .storage import SessionStore, atomic_json, safe_child
@@ -54,6 +64,20 @@ from .windows_dictation import WindowsInput
 
 if TYPE_CHECKING:
     from .desktop_ui import LectureWindow
+
+
+def set_saved_model(root: Path, model_id: str) -> None:
+    """Change the saved dictation speech model while the window is closed.
+
+    Without saved settings the window starts from the lecture window's model.
+    """
+    path = root / "settings.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError, ValueError:
+        return
+    if isinstance(value, dict):
+        atomic_json(path, {**value, "model": model_id})
 
 
 class Task(QThread):
@@ -260,11 +284,6 @@ class DictationWindow(QDialog):
             self.shortcut = Shortcut(self.native, self.activate_shortcut)
         except (OSError, RuntimeError) as error:
             native_error = str(error)
-        self.process = QProcess(self)
-        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._read_output)
-        self.process.finished.connect(self._finished)
-        self.process.errorOccurred.connect(self._process_error)
         self.timer = QTimer(self)
         self.timer.setInterval(40)
         self.timer.timeout.connect(self._tick)
@@ -285,39 +304,51 @@ class DictationWindow(QDialog):
         mic_row = QHBoxLayout()
         mic_row.addWidget(self.microphone, 1)
         self.refresh_mics = QPushButton("Refresh")
+        self.refresh_mics.setToolTip("Look for newly connected microphones.")
         self.refresh_mics.clicked.connect(self.load_microphones)
         mic_row.addWidget(self.refresh_mics)
         form.addRow("Microphone", mic_row)
         self.model = QComboBox()
+        self.model.setToolTip(owner.model.toolTip())
         for i in range(owner.model.count()):
             self.model.addItem(owner.model.itemText(i), owner.model.itemData(i))
+            self.model.setItemData(
+                i, owner.model.itemData(i, Qt.ItemDataRole.ToolTipRole), Qt.ItemDataRole.ToolTipRole
+            )
         self.model.setCurrentIndex(owner.model.currentIndex())
         form.addRow("Speech model", self.model)
         self.device = QComboBox()
-        self.device.addItems(["CPU", "GPU", "NPU"])
-        self.device.setCurrentText("CPU")
+        self.device.setToolTip(DEVICE_HINT)
+        add_choices(self.device, SPEECH_DEVICES, recommended="CPU")
         form.addRow("Speech device", self.device)
         self.cleanup = QComboBox()
-        self.cleanup.addItems(["off", "light", "medium"])
-        self.cleanup.setCurrentText(PROCESSING_DEFAULTS["dictation"][0])
+        add_choices(self.cleanup, CLEANUP_LEVELS, recommended=PROCESSING_DEFAULTS["dictation"][0])
+        select(self.cleanup, PROCESSING_DEFAULTS["dictation"][0])
         form.addRow("Cleanup", self.cleanup)
         form.addRow("Formatting", QLabel("Mostly prose"))
         self.cleanup_model = QComboBox()
-        for model_id, spec in MANIFEST.items():
-            if spec.task == "text-cleanup":
-                self.cleanup_model.addItem(model_id, model_id)
+        self.cleanup_model.setToolTip(owner.cleanup_model.toolTip())
+        add_choices(
+            self.cleanup_model,
+            (model_choice(m) for m, spec in MANIFEST.items() if spec.task == "text-cleanup"),
+        )
         self.cleanup_model.setCurrentIndex(max(0, self.cleanup_model.findData(DEFAULT_MODEL)))
         form.addRow("Cleanup model", self.cleanup_model)
         self.cleanup_device = QComboBox()
-        self.cleanup_device.addItems(["AUTO", "GPU", "CPU", "NPU"])
+        self.cleanup_device.setToolTip("Which part of the computer runs the AI.")
+        add_choices(self.cleanup_device, AI_DEVICES, recommended="AUTO")
         form.addRow("Cleanup device", self.cleanup_device)
         self.hotkey_text = QLineEdit("Ctrl+Alt+Space")
         self.hotkey_text.setAccessibleName("Dictation shortcut")
+        self.hotkey_text.setToolTip("Keys that start and stop dictation from any app.")
         form.addRow("Shortcut", self.hotkey_text)
         self.mode = QComboBox()
         self.mode.addItems(["Toggle", "Hold to talk"])
+        self.mode.setItemData(0, "Press once to start, again to stop.", Qt.ItemDataRole.ToolTipRole)
+        self.mode.setItemData(1, "Records while you hold the keys.", Qt.ItemDataRole.ToolTipRole)
         form.addRow("Shortcut mode", self.mode)
         self.enable = QCheckBox("Enable global shortcut")
+        self.enable.setToolTip("Lets the shortcut work while you are in other apps.")
         self.enable.toggled.connect(self._enable_shortcut)
         self.enable.setEnabled(self.shortcut is not None)
         form.addRow(self.enable)
@@ -334,6 +365,7 @@ class DictationWindow(QDialog):
         layout.addWidget(self.level)
         row = QHBoxLayout()
         self.record = QPushButton("Record a copy")
+        self.record.setToolTip("Record here and show the text below, without typing it anywhere.")
         self.record.clicked.connect(self.record_or_stop)
         row.addWidget(self.record)
         self.cancel_button = QPushButton("Cancel")
@@ -350,6 +382,7 @@ class DictationWindow(QDialog):
         layout.addWidget(self.text, 1)
         row = QHBoxLayout()
         self.raw = QCheckBox("Show unedited transcript")
+        self.raw.setToolTip("Show what was heard before AI cleanup.")
         self.raw.toggled.connect(lambda: self._show_record(self.results.currentRow()))
         row.addWidget(self.raw)
         self.copy = QPushButton("Copy text")
@@ -359,10 +392,22 @@ class DictationWindow(QDialog):
         self.records: list[dict[str, Any]] = []
         self.load_microphones()
         self._load_settings()
-        if not owner.cleanup_available:
-            self.cleanup.setCurrentText("off")
         self._refresh_history()
         self._buttons()
+        self.model.currentIndexChanged.connect(self._buttons)  # The device may not apply.
+        # The app's model process keeps this window's selected models loaded too.
+        for selector in (
+            self.model,
+            self.device,
+            self.cleanup,
+            self.cleanup_model,
+            self.cleanup_device,
+        ):
+            selector.currentIndexChanged.connect(owner.preload_models)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self.owner.preload_models()
 
     @property
     def busy(self) -> bool:
@@ -379,11 +424,11 @@ class DictationWindow(QDialog):
     def _load_settings(self) -> None:
         try:
             value = json.loads(self.settings_path.read_text(encoding="utf-8"))
-            for name in ("model", "device", "cleanup", "cleanup_model", "cleanup_device", "mode"):
-                combo: QComboBox = getattr(self, name)
-                index = combo.findText(str(value.get(name, "")))
-                if index >= 0:
-                    combo.setCurrentIndex(index)
+            for name in ("model", "device", "cleanup", "cleanup_model", "cleanup_device"):
+                select(getattr(self, name), str(value.get(name, "")))
+            index = self.mode.findText(str(value.get("mode", "")))
+            if index >= 0:
+                self.mode.setCurrentIndex(index)
             self.hotkey_text.setText(str(value.get("hotkey", "Ctrl+Alt+Space")))
             saved_mic = bytes.fromhex(str(value.get("microphone", "")))
             index = self.microphone.findData(saved_mic)
@@ -397,9 +442,10 @@ class DictationWindow(QDialog):
 
     def _save_settings(self) -> None:
         value = {
-            name: getattr(self, name).currentText()
-            for name in ("model", "device", "cleanup", "cleanup_model", "cleanup_device", "mode")
+            name: choice(getattr(self, name))
+            for name in ("model", "device", "cleanup", "cleanup_model", "cleanup_device")
         }
+        value["mode"] = self.mode.currentText()
         value["hotkey"] = self.hotkey_text.text()
         value["microphone"] = bytes(self.microphone.currentData() or b"").hex()
         atomic_json(self.settings_path, value)
@@ -456,6 +502,18 @@ class DictationWindow(QDialog):
             self.cleanup_device,
         ):
             control.setEnabled(not self.busy)
+        cpu_model = cpu_only(choice(self.model))
+        self.device.setEnabled(not self.busy and not cpu_model)
+        self.device.setToolTip(CPU_ONLY_HINT if cpu_model else DEVICE_HINT)
+        cleanup_ready = self.owner.model_installed(str(self.cleanup_model.currentData()))
+        self.cleanup.setEnabled(not self.busy and cleanup_ready)
+        self.cleanup.setToolTip(
+            "How much the AI tidies the wording before it is typed."
+            if cleanup_ready
+            else "Download the AI cleanup model from Manage models first."
+        )
+        if not cleanup_ready and not self.busy:
+            select(self.cleanup, "off")
         self.hotkey_text.setEnabled(not self.busy and not self.enable.isChecked())
         self.mode.setEnabled(not self.busy and not self.enable.isChecked())
         self.record.setText("Stop recording" if self.state == "recording" else "Record a copy")
@@ -473,18 +531,19 @@ class DictationWindow(QDialog):
         if not model:
             self.status.setText("Choose an installed speech model first.")
             return
-        if model in MANIFEST and not (self.owner.model_root / model).is_dir():
-            self.status.setText("Download the selected speech model into the model folder first.")
+        if model in MANIFEST and not self.owner.model_installed(model):
+            self.status.setText("Download the selected speech model from Manage models first.")
             return
-        if (
-            self.cleanup.currentText() != "off"
-            and not (self.owner.model_root / str(self.cleanup_model.currentData())).is_dir()
+        if choice(self.cleanup) != "off" and not self.owner.model_installed(
+            str(self.cleanup_model.currentData())
         ):
             self.status.setText("Download the cleanup model first, or set Cleanup to Off.")
             return
         if self.microphone.currentData() is None:
             self.status.setText("No microphone is available. Connect one and press Refresh.")
             return
+        # Background versions of lectures wait; dictation needs the model process first.
+        self.owner.pause_background()
         self.cancelled = False
         self.intended = None
         self.output = ""
@@ -624,13 +683,13 @@ class DictationWindow(QDialog):
             "--model",
             str(self.model.currentData()),
             "--device",
-            self.device.currentText(),
+            choice(self.device),
             "--cleanup",
-            self.cleanup.currentText(),
+            choice(self.cleanup),
             "--cleanup-model",
             str(self.cleanup_model.currentData()),
             "--cleanup-device",
-            self.cleanup_device.currentText(),
+            choice(self.cleanup_device),
             "--cleanup-mode",
             "dictation",
             "--formatting",
@@ -638,23 +697,18 @@ class DictationWindow(QDialog):
             "--stop-file",
             str(self.job / "stop"),
         ]
-        program, arguments = worker_command(args)
         self.output = ""
         self._state("processing")
-        self.status.setText("Transcribing and cleaning… first use may take longer to load models.")
-        self.process.setProgram(program)
-        self.process.setArguments(arguments)
-        self.process.start()
+        self.status.setText("Transcribing and cleaning… models still loading make this slower.")
+        self.owner.worker.run(args, self._read_output, self._job_done)
 
-    def _read_output(self) -> None:
-        self.output = (
-            self.output
-            + bytes(self.process.readAllStandardOutput().data()).decode("utf-8", errors="replace")
-        )[-32000:]
+    def _read_output(self, text: str = "") -> None:
+        self.output = (self.output + text)[-32000:]
 
-    def _process_error(self, error: QProcess.ProcessError) -> None:
-        if error == QProcess.ProcessError.FailedToStart and self.state == "processing":
-            self._finished(1, QProcess.ExitStatus.CrashExit)
+    def _job_done(self, code: int, crashed: bool) -> None:
+        self._finished(
+            code, QProcess.ExitStatus.CrashExit if crashed else QProcess.ExitStatus.NormalExit
+        )
 
     def _finished(self, code: int, status: QProcess.ExitStatus) -> None:
         if self.state != "processing":
@@ -684,7 +738,7 @@ class DictationWindow(QDialog):
             "session_id": session_id,
             "recording": str(self.job / "recording.wav") if self.job else "",
             "status": "cancelled" if self.cancelled else "ready" if success else "failed",
-            "diagnostics": self.output[-4000:] or error or self.process.errorString(),
+            "diagnostics": self.output[-4000:] or error or self.owner.worker.error_text,
         }
         try:
             self.history.save(record)
@@ -721,7 +775,7 @@ class DictationWindow(QDialog):
             message = "Cancelled." if self.cancelled else "Processing failed."
             self._idle(
                 f"{message} Recovered text and audio are retained. "
-                f"{error or self.output[-1200:] or self.process.errorString()}"
+                f"{error or self.output[-1200:] or self.owner.worker.error_text}"
             )
 
     def _inserted(self, result: Any) -> None:
@@ -792,3 +846,4 @@ class DictationWindow(QDialog):
             event.accept()
             self.closing = False
             self.changed.emit()
+            self.owner.preload_models()  # Drops models only this window used.

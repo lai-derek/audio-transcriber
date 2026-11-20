@@ -220,7 +220,7 @@
     "src\\npu_scribe\\__init__.py": "441b65a16e94dc0d09d42e7f622924d294f1b8d0f3ffbc1fe6e49e689ea79ca4"
   },
   "ci": {
-    "url": "https://github.com/derek-l8/npu-scribe/actions/runs/37147819964",
+    "url": "https://github.com/lai-derek/audio-transcriber/actions/runs/37147819964",
     "conclusion": "startup_failure",
     "setting_or_rerun_changed": false,
     "reason": "Official checkout/setup-python actions rejected by repository action policy; authenticated access unavailable."

@@ -91,7 +91,7 @@ def main() -> None:
     history.close()
     exports = []
     for fmt in ("text", "markdown", "srt", "json"):
-        window.export_format.setCurrentText(fmt)
+        window.export_format.setCurrentIndex(window.export_format.findData(fmt))
         output = target.data_dir / f"edited-smoke.{fmt}"
         QFileDialog.getSaveFileName = lambda *args, path=output: (str(path), "")
         window.choose_export()

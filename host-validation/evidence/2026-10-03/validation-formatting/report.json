@@ -15,7 +15,7 @@
     "build": "1.6.1"
   },
   "ci": {
-    "url": "https://github.com/derek-l8/npu-scribe/actions/runs/37147819964",
+    "url": "https://github.com/lai-derek/audio-transcriber/actions/runs/37147819964",
     "conclusion": "startup_failure",
     "jobs_started": 0,
     "reason": "Repository action policy allowed only repositories owned by derek-l8; rejected official pinned actions/checkout and actions/setup-python",

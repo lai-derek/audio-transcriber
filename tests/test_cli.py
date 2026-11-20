@@ -9,6 +9,9 @@ import pytest
 
 from audio_transcriber.cli import build_parser, main
 
+# Device choice and fallback apply to the OpenVINO Whisper models; Parakeet is CPU-only.
+WHISPER = "whisper-base.en-int4-ov"
+
 
 def test_manual_device_does_not_benchmark_other_devices(tmp_path, monkeypatch):
     from audio_transcriber import cli
@@ -56,6 +59,8 @@ def test_auto_falls_back_after_selected_device_fails(
         "--formatting",
         "off",
         str(three_second_wav),
+        "--model",
+        WHISPER,
         "--device",
         "AUTO",
     ]
@@ -72,6 +77,8 @@ def test_auto_falls_back_after_selected_device_fails(
             "--formatting",
             "off",
             session_id,
+            "--model",
+            WHISPER,
             "--device",
             "auto",
         ]
@@ -115,6 +122,8 @@ def test_manual_failure_does_not_fall_back(tmp_path, three_second_wav, monkeypat
                 "--formatting",
                 "off",
                 str(three_second_wav),
+                "--model",
+                WHISPER,
                 "--device",
                 "GPU",
             ]
@@ -178,9 +187,10 @@ def test_transcribe_default_has_no_overlap() -> None:
     args = build_parser().parse_args(
         ["transcribe", "--cleanup", "off", "--formatting", "off", "lecture.wav"]
     )
-    assert args.model == "whisper-tiny.en-int4-ov"
+    assert args.model == "parakeet-tdt-0.6b-v2-int8"
     assert args.device == "CPU"
-    assert args.chunk_seconds == 30.0
+    assert args.chunk_seconds is None  # Resolved from the model; see test_chunk_settings_*.
+    assert args.chunk_strategy is None
     assert args.overlap_seconds == 0.0
     evaluate = build_parser().parse_args(["evaluate", "manifest.json", "--overlap-seconds", "1"])
     assert evaluate.overlap_seconds == 1.0
@@ -457,33 +467,16 @@ def test_default_transcription_requires_real_model_not_mock(data_dir, three_seco
         )
         == 1
     )
-    assert "whisper-tiny.en-int4-ov' is not installed" in capsys.readouterr().err
+    assert "parakeet-tdt-0.6b-v2-int8' is not installed" in capsys.readouterr().err
     assert not (data_dir / "lectures").exists()
 
 
-def test_default_library_reuses_existing_data_after_rename(tmp_path, monkeypatch):
-    from audio_transcriber.cli import default_data_dir
-
-    for name in ("AUDIO_TRANSCRIBER_DATA_DIR", "NPUSCRIBE_DATA_DIR"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr("platformdirs.user_data_path", lambda name, **kwargs: tmp_path / name)
-    current = tmp_path / "audio-transcriber"
-    legacy = tmp_path / "npu-scribe"
-    assert default_data_dir() == current
-    legacy.mkdir()
-    saved = legacy / "settings.json"
-    saved.write_text('{"cleanup": "medium"}', encoding="utf-8")
-    assert default_data_dir() == legacy
-    assert saved.read_text(encoding="utf-8") == '{"cleanup": "medium"}'
-    current.mkdir()
-    assert default_data_dir() == current
-
-
-def test_library_override_accepts_old_setting_and_prefers_new_name(tmp_path, monkeypatch):
+def test_default_library_ignores_folders_from_earlier_project_names(tmp_path, monkeypatch):
     from audio_transcriber.cli import default_data_dir
 
     monkeypatch.delenv("AUDIO_TRANSCRIBER_DATA_DIR", raising=False)
-    monkeypatch.setenv("NPUSCRIBE_DATA_DIR", str(tmp_path / "previous"))
-    assert default_data_dir() == tmp_path / "previous"
+    monkeypatch.setattr("platformdirs.user_data_path", lambda name, **kwargs: tmp_path / name)
+    (tmp_path / "npu-scribe").mkdir()
+    assert default_data_dir() == tmp_path / "audio-transcriber"
     monkeypatch.setenv("AUDIO_TRANSCRIBER_DATA_DIR", str(tmp_path / "chosen"))
     assert default_data_dir() == tmp_path / "chosen"

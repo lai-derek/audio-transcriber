@@ -16,6 +16,9 @@ ov_data, ov_bins, ov_hidden = collect_all("openvino")
 genai_data, genai_bins, genai_hidden = collect_all("openvino_genai")
 # GenAI loads this extension dynamically; import analysis does not collect its DLL.
 tokenizer_bins = collect_dynamic_libs("openvino_tokenizers")
+# Parakeet runs through sherpa-onnx; its extension loads onnxruntime.dll and the
+# sherpa-onnx DLLs from its own folder, which import analysis does not collect.
+sherpa_bins = collect_dynamic_libs("sherpa_onnx")
 assets = runpy.run_path(str(root / "packaging" / "bundle_assets.py"))
 notice_data = assets["collect_notices"](root, Path(workpath) / "notices")
 notice_data.append((str(root / "packaging" / "GettingStarted.html"), "help"))
@@ -29,9 +32,9 @@ a = Analysis(
     [str(root / "packaging" / "desktop_entry.py")],
     pathex=[str(root / "src")],
     hookspath=[str(root / "packaging" / "hooks")],
-    binaries=ov_bins + genai_bins + tokenizer_bins,
+    binaries=ov_bins + genai_bins + tokenizer_bins + sherpa_bins,
     datas=ov_data + genai_data + notice_data,
-    hiddenimports=ov_hidden + genai_hidden,
+    hiddenimports=ov_hidden + genai_hidden + ["sherpa_onnx"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Audio Transcriber", console=False)
@@ -40,9 +43,9 @@ worker = Analysis(
     [str(root / "packaging" / "worker_entry.py")],
     pathex=[str(root / "src")],
     hookspath=[str(root / "packaging" / "hooks")],
-    binaries=ov_bins + genai_bins + tokenizer_bins,
+    binaries=ov_bins + genai_bins + tokenizer_bins + sherpa_bins,
     datas=ov_data + genai_data + notice_data,
-    hiddenimports=ov_hidden + genai_hidden,
+    hiddenimports=ov_hidden + genai_hidden + ["sherpa_onnx"],
 )
 worker_pyz = PYZ(worker.pure)
 worker_exe = EXE(

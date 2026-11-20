@@ -1,7 +1,7 @@
 """Check Windows shortcuts and insertion in a temporary test-owned Qt editor.
 
 No microphone, models, clipboard writes, or other application text are used.
-Run with an output directory outside cloud sync; see TESTING.md.
+Run with an output directory outside cloud sync; see host-validation/README.md.
 """
 
 from __future__ import annotations

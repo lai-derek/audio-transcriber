@@ -16,8 +16,8 @@ for($attempt=0; $attempt -lt 2; $attempt++) {
   $main=WaitWindow $p.Id 'Audio Transcriber — Lecture library'
   $h=[OwnWindow]::Find($p.Id)
   if($attempt -eq 0) {
-   $opening=[OwnWindow]::InvokeAsync((FindControl $main 'Import lecture…' $button))
-   FilePicker $p.Id 'Import lecture' $Media 1148
+   $opening=[OwnWindow]::InvokeAsync((FindControl $main 'Import audio…' $button))
+   FilePicker $p.Id 'Import audio' $Media 1148
    if(-not $opening.Wait(5000)) { throw 'Import invocation did not return' }
    $script:checkpoint=$null
    WaitUntil {
@@ -35,12 +35,16 @@ for($attempt=0; $attempt -lt 2; $attempt++) {
    $workers=@(Get-CimInstance Win32_Process -Filter ('ParentProcessId = '+$p.Id) | Select-Object -ExpandProperty ProcessId)
    if($workers.Count -lt 1) { throw 'No owned child worker observed' }
   } else {
-   $resume=FindControl $main 'Resume selected' $button
+   # Resume appears once the stopped lecture is selected.
+   $list=FindControl $main 'Lecture library' ([System.Windows.Automation.ControlType]::List)
+   ClickElement $h ($list.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem)))
+   WaitUntil { try { FindControl $main 'Resume' $button | Out-Null; return $true } catch { return $false } } 'Resume did not appear for the stopped lecture'
+   $resume=FindControl $main 'Resume' $button
    if(-not $resume.Current.IsEnabled) { throw 'Reopened interrupted lecture cannot resume' }
    InvokeControl $resume
    $session=Join-Path (Split-Path $script:checkpoint -Parent) 'session.json'
    WaitUntil {
-    try { return (Get-Content -LiteralPath $session -Raw | ConvertFrom-Json).status -eq 'ready' -and (FindControl $main 'Import lecture…' $button).Current.IsEnabled } catch { return $false }
+    try { return (Get-Content -LiteralPath $session -Raw | ConvertFrom-Json).status -eq 'ready' -and (FindControl $main 'Import audio…' $button).Current.IsEnabled } catch { return $false }
    } 'GUI resume did not finish successfully' 300
   }
   [OwnWindow]::PostMessage($h,0x10,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null

@@ -44,6 +44,18 @@ def atomic_json(path: Path, value: Any) -> None:
     atomic_write(path, (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode())
 
 
+def remove_checkpoint(path: Path) -> None:
+    """Allow a concurrent Windows progress reader to release a finished checkpoint."""
+    for attempt in range(6):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == 5:
+                raise
+            time.sleep(0.02 * 2**attempt)
+
+
 def safe_child(root: Path, name: str) -> Path:
     if not SAFE_ID.fullmatch(name):
         raise ValueError("unsafe identifier")

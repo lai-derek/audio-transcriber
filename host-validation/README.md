@@ -63,7 +63,7 @@ returning them; `skip` and `unverified` never count as passes.
 
 Preparing an evaluation manifest: point `audio_url` at the official public
 source and record its SHA-256, exact size, license, and reference-transcript
-provenance. See `MODEL_EVALUATION.md`. Do not bundle copyrighted media here.
+provenance. See [tested decisions](../docs/TESTED_DECISIONS.md). Do not bundle copyrighted media here.
 
 Status: executed on one Windows host on 2026-09-30. Sanitized JSON reports are
 in `evidence/2026-09-30/`. CPU/GPU/NPU smoke checks used synthetic silence;

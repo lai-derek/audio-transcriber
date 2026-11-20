@@ -32,9 +32,16 @@ from .chunking import (
 from .cleanup import deterministic_cleanup
 from .devices import Benchmark, device_order
 from .engines import SpeechEngine
-from .media import FFmpegDecoder, MediaDecoder, MediaError, PcmWavDecoder, resolve_ffmpeg
+from .media import (
+    FFmpegDecoder,
+    MediaDecoder,
+    MediaError,
+    PcmWavDecoder,
+    resolve_ffmpeg,
+    wav_needs_conversion,
+)
 from .models import InferenceProvenance, Segment, Session, Transcript
-from .storage import SessionStore
+from .storage import SessionStore, remove_checkpoint
 
 RESUMABLE_STATUSES = {"interrupted", "processing", "failed"}
 
@@ -71,14 +78,20 @@ def new_session_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def select_decoder(suffix: str, ffmpeg_path: str | None) -> MediaDecoder:
-    if suffix.casefold() == ".wav":
+def select_decoder(source: Path, ffmpeg_path: str | None) -> MediaDecoder:
+    """Read a mono 16 kHz WAV directly; convert everything else with FFmpeg.
+
+    The choice depends only on the file, so a resumed session picks the same decoder.
+    """
+    suffix = source.suffix.casefold()
+    if suffix == ".wav" and not wav_needs_conversion(source):
         return PcmWavDecoder()
     executable = resolve_ffmpeg(ffmpeg_path)
     if not executable:
+        what = "this WAV (it is not mono 16 kHz)" if suffix == ".wav" else f"'{suffix}' media"
         raise MediaError(
-            f"decoding '{suffix}' media requires FFmpeg; install it on PATH "
-            "or select its executable with --ffmpeg"
+            f"decoding {what} requires FFmpeg; install it on PATH, choose it under "
+            "Settings → FFmpeg program, or pass --ffmpeg"
         )
     return FFmpegDecoder(executable)
 
@@ -92,7 +105,7 @@ def start_transcription(
     session_id = new_session_id()
     session = Session(session_id, source.name, "recording", source.name)
     copy_path, fingerprint = store.create_imported_session(session, source)
-    decoder = select_decoder(copy_path.suffix, options.ffmpeg_path)
+    decoder = select_decoder(copy_path, options.ffmpeg_path)
     session.status = "processing"
     session.diagnostics.update(
         {
@@ -117,7 +130,7 @@ def _spec_identity(options: BatchOptions) -> str:
 
 def _normalized_audio(store: SessionStore, session: Session, options: BatchOptions) -> Any:
     copy_path = store.source_copy(session.id)
-    decoder = select_decoder(copy_path.suffix, options.ffmpeg_path)
+    decoder = select_decoder(copy_path, options.ffmpeg_path)
     audio = decoder.decode(copy_path)
     if decoder.identity != PcmWavDecoder.identity:
         # Move the staged result into session workspace and clean the staging dir.
@@ -421,7 +434,7 @@ class BatchRunner:
         self.store.save_session(session)
 
         # Terminal state: the checkpoint is no longer needed; work files are cleaned.
-        self.store.checkpoint_path(session.id).unlink(missing_ok=True)
+        remove_checkpoint(self.store.checkpoint_path(session.id))
         shutil.rmtree(self.store.work_dir(session.id), ignore_errors=True)
 
     def _fail(self, session: Session, stage: str, error: BaseException) -> None:

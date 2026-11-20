@@ -41,12 +41,14 @@ class LecturePlayer(QWidget):
         self.time = QLabel("00:00:00 / 00:00:00")
         row.addWidget(self.time)
         self.seek_button = QPushButton("Seek to segment")
-        self.seek_button.setToolTip("Select transcript text, then seek to that segment's start.")
+        self.seek_button.setToolTip("Jump the audio to the line your cursor is on.")
         self.seek_button.setEnabled(False)
         row.addWidget(self.seek_button)
         layout.addLayout(row)
-        self.message = QLabel("Select a lecture to load its preserved audio.")
+        # Shown only while audio loads or when something is wrong.
+        self.message = QLabel("")
         self.message.setWordWrap(True)
+        self.message.hide()
         layout.addWidget(self.message)
         self.player.durationChanged.connect(self._duration)
         self.player.positionChanged.connect(self._position)
@@ -67,13 +69,9 @@ class LecturePlayer(QWidget):
         self.time.setText("00:00:00 / 00:00:00")
         if source is None or not source.is_file():
             self.player.setSource(QUrl())
-            self.message.setText(
-                "Preserved audio is unavailable."
-                if source
-                else "Select a lecture to load its preserved audio."
-            )
+            self._say("This lecture's audio file is missing." if source else "")
             return
-        self.message.setText("Loading preserved audio…")
+        self._say("Loading the audio…")
         self.player.setSource(QUrl.fromLocalFile(str(source)))
 
     def toggle(self) -> None:
@@ -107,13 +105,15 @@ class LecturePlayer(QWidget):
             self.player.setActiveVideoTrack(-1)
             self.play_button.setEnabled(True)
             self.slider.setEnabled(self.player.isSeekable())
-            self.message.setText(
-                "Preserved source audio. Select transcript text and seek to review it."
-            )
+            self._say("")
 
     def _error(self, error: QMediaPlayer.Error, message: str) -> None:
         if error != QMediaPlayer.Error.NoError:
             self.play_button.setEnabled(False)
             self.slider.setEnabled(False)
             self.seek_button.setEnabled(False)
-            self.message.setText(f"Audio playback failed: {message}")
+            self._say(f"Audio playback failed: {message}")
+
+    def _say(self, text: str) -> None:
+        self.message.setText(text)
+        self.message.setVisible(bool(text))

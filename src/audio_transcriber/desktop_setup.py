@@ -7,12 +7,12 @@ import shutil
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from platformdirs import user_cache_path
-from PySide6.QtCore import QProcess, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QProcess, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QProgressBar,
     QPushButton,
     QTextEdit,
@@ -28,7 +30,14 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
-from .acquisition import MANIFEST, download_model
+from .acquisition import (
+    DEFAULT_SPEECH_MODEL,
+    MANIFEST,
+    PARAKEET_V2,
+    download_model,
+    partial_download,
+)
+from .ai_cleanup import STYLES
 from .storage import atomic_json
 from .updates import RELEASES_URL, Release, download_installer, latest_release
 
@@ -40,6 +49,9 @@ class DownloadTask(QThread):
     result = Signal(object)
     failed = Signal(str)
     progress = Signal(object, object)
+    step = Signal(object, object)  # (queue position, model ID) as each model starts
+    downloaded = Signal(object)  # model ID once it is verified and installed
+    checking = Signal(bool)  # True while a noticeable checksum pass runs
 
     def __init__(self, action: Callable[[DownloadTask], Any], parent: QDialog) -> None:
         super().__init__(parent)
@@ -53,48 +65,155 @@ class DownloadTask(QThread):
             self.failed.emit(str(error))
 
 
+# Speech models the app offers, recommended first. Whisper Tiny stays in the manifest
+# for tests and the command line but is not offered here.
+SPEECH_MODELS = (DEFAULT_SPEECH_MODEL, "whisper-small.en-int4-ov", "whisper-base.en-int4-ov")
+CLEANUP_MODELS = tuple(m for m, spec in MANIFEST.items() if spec.task == "text-cleanup")
+OFFERED_MODELS = (*SPEECH_MODELS, *CLEANUP_MODELS)
+# Saved as "model_setup" once automatic setup finishes. A new value makes the next launch
+# download newly offered models; "done" was the value before Parakeet v2 was offered.
+MODEL_SETUP_VERSION = "parakeet-v2"
+# (dropdown label, hover explanation, status-sentence name) per offered speech model.
+_SPEECH_TEXT = {
+    PARAKEET_V2: (
+        "Parakeet v2",
+        "The most accurate and fastest. Always runs on the CPU.",
+        "the Parakeet v2 speech model",
+    ),
+    "whisper-small.en-int4-ov": (
+        "Whisper Small",
+        "Accurate, but slower than Parakeet v2.",
+        "the Whisper Small speech model",
+    ),
+    "whisper-base.en-int4-ov": (
+        "Whisper Base",
+        "Small download, but less accurate.",
+        "the Whisper Base speech model",
+    ),
+}
+
+
+def model_label(model_id: str) -> str:
+    """Name in the Manage models list."""
+    if model_id in _SPEECH_TEXT:
+        label = _SPEECH_TEXT[model_id][0]
+        return f"Speech — {label}" + (" (recommended)" if model_id == DEFAULT_SPEECH_MODEL else "")
+    return "AI cleanup (optional)"
+
+
+def model_choice(model_id: str) -> tuple[str, str, str]:
+    """(value, dropdown label, hover explanation) for a model in a settings dropdown."""
+    if model_id in _SPEECH_TEXT:
+        label, explanation, _ = _SPEECH_TEXT[model_id]
+        return model_id, label, explanation
+    if model_id == "qwen2.5-7b-instruct-int4-ov":
+        return model_id, "Qwen 2.5 (7B)", "The AI model for cleanup, formatting, and summaries."
+    return model_id, model_id, ""
+
+
+# Dropdown choices: (saved value, label, explanation shown when hovering the choice).
+DEVICE_HINT = "Which part of the computer runs transcription."
+CPU_ONLY_HINT = "Parakeet v2 always runs on the CPU, so this setting does not apply to it."
+SPEECH_DEVICES = (
+    ("CPU", "CPU", "Works on every computer."),
+    ("GPU", "GPU", "The graphics chip. Can be faster if your computer has one."),
+    ("NPU", "NPU", "The AI chip in some newer laptops."),
+)
+AI_DEVICES = (
+    ("AUTO", "Automatic", "Uses the graphics chip if available, otherwise the CPU."),
+    *SPEECH_DEVICES,
+)
+LEVEL_HELP = {
+    "light": "Removes ums, repeats, and filler, and fixes punctuation.",
+    "medium": "Also fixes false starts and run-on sentences.",
+    "heavy": "Rewrites for easy reading. Keeps every point; usually shorter.",
+}
+CLEANUP_LEVELS = (
+    ("off", "Off", "No AI cleanup. The transcript stays exactly as heard."),
+    *((level, level.capitalize(), LEVEL_HELP.get(level, "")) for level in STYLES),
+)
+
+
+def add_choices(
+    combo: QComboBox, choices: Iterable[tuple[str, str, str]], recommended: str = ""
+) -> None:
+    """Add labelled choices; code reads the saved value with choice(), never the label."""
+    for value, label, explanation in choices:
+        combo.addItem(f"{label} (recommended)" if value == recommended else label, value)
+        if explanation:
+            combo.setItemData(combo.count() - 1, explanation, Qt.ItemDataRole.ToolTipRole)
+
+
+def choice(combo: QComboBox) -> str:
+    return str(combo.currentData() or "")
+
+
+def select(combo: QComboBox, value: str) -> bool:
+    index = combo.findData(value)
+    if index >= 0:
+        combo.setCurrentIndex(index)
+    return index >= 0
+
+
+def model_name(model_id: str) -> str:
+    """Name for status sentences, e.g. "Downloading the AI cleanup model"."""
+    if model_id in _SPEECH_TEXT:
+        return _SPEECH_TEXT[model_id][2]
+    return "the AI cleanup model"
+
+
+def size_text(count: int) -> str:
+    return f"{count / 1024**3:.1f} GB" if count >= 1024**3 else f"{count / 1024**2:,.0f} MB"
+
+
 class ModelDialog(QDialog):
+    """Checked models download one after another; missing models start checked."""
+
     def __init__(self, owner: LectureWindow) -> None:
         super().__init__(owner)
         self.owner = owner
         self.task: DownloadTask | None = None
+        self.current = ""
         self.setWindowTitle("Manage models")
-        self.resize(520, 270)
+        self.resize(560, 340)
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Download a speech model to start transcribing. AI cleanup is optional. "
-            "After download, models work offline."
+            "Checked models download one after another. A speech model is needed to "
+            "transcribe; AI cleanup adds cleanup, summaries, and layouts. After download, "
+            "models work offline."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-        self.model = QComboBox()
-        self.model.setAccessibleName("Model to download")
-        preferred = ["whisper-base.en-int4-ov", "whisper-tiny.en-int4-ov"]
-        for model_id in [*preferred, *(m for m in MANIFEST if m not in preferred)]:
-            spec = MANIFEST[model_id]
-            label = (
-                "Speech — recommended for lectures"
-                if model_id == preferred[0]
-                else "Speech — smaller download"
-                if model_id == preferred[1]
-                else "AI cleanup (optional)"
+        self.models = QListWidget()
+        self.models.setAccessibleName("Models to download")
+        for model_id in OFFERED_MODELS:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, model_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Unchecked
+                if owner.model_installed(model_id)
+                else Qt.CheckState.Checked
             )
-            self.model.addItem(f"{label}: {spec.download_bytes / 1024**2:,.0f} MB", model_id)
-        layout.addWidget(self.model)
+            self.models.addItem(item)
+        self.models.setFixedHeight(
+            self.models.sizeHintForRow(0) * self.models.count() + 2 * self.models.frameWidth() + 4
+        )
+        layout.addWidget(self.models)
         self.detail = QLabel()
         self.detail.setWordWrap(True)
         layout.addWidget(self.detail)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         layout.addWidget(self.progress)
-        self.status = QLabel("Choose a model, then click Download.")
+        self.status = QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         buttons = QHBoxLayout()
         self.download = QPushButton("Download")
         self.download.clicked.connect(self.start)
         buttons.addWidget(self.download)
-        self.cancel = QPushButton("Cancel download")
+        self.cancel = QPushButton("Stop download")
         self.cancel.setEnabled(False)
         self.cancel.clicked.connect(self.cancel_download)
         buttons.addWidget(self.cancel)
@@ -102,18 +221,73 @@ class ModelDialog(QDialog):
         close.clicked.connect(self.close)
         buttons.addWidget(close)
         layout.addLayout(buttons)
-        self.model.currentIndexChanged.connect(self.describe)
-        self.describe()
+        self.models.currentRowChanged.connect(self.describe)
+        self.models.itemChanged.connect(self.selection_changed)
+        self.models.setCurrentRow(0)
+        self.refresh()
 
-    def describe(self) -> None:
-        spec = MANIFEST[str(self.model.currentData())]
-        installed = (self.owner.model_root / spec.id).is_dir()
+    def model_item(self, model_id: str) -> QListWidgetItem:
+        for row in range(self.models.count()):
+            item = self.models.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == model_id:
+                return item
+        raise KeyError(model_id)
+
+    def checked(self) -> list[str]:
+        return [
+            str(item.data(Qt.ItemDataRole.UserRole))
+            for item in map(self.models.item, range(self.models.count()))
+            if item.checkState() == Qt.CheckState.Checked
+        ]
+
+    def refresh(self, keep_status: bool = False) -> None:
+        """Show each model's size and whether it is installed or partly downloaded."""
+        self.models.blockSignals(True)
+        for row in range(self.models.count()):
+            item = self.models.item(row)
+            model_id = str(item.data(Qt.ItemDataRole.UserRole))
+            state = (
+                " · Installed"
+                if self.owner.model_installed(model_id)
+                else " · Partly downloaded"
+                if partial_download(self.owner.model_root, model_id)
+                else ""
+            )
+            size = size_text(MANIFEST[model_id].download_bytes)
+            item.setText(f"{model_label(model_id)} · {size}{state}")
+        self.models.blockSignals(False)
+        self.describe()
+        if not keep_status:
+            self.selection_changed()
+
+    def selection_changed(self, *_: object) -> None:
+        if self.task:
+            return
+        queue = self.checked()
+        self.download.setEnabled(bool(queue))
+        total = sum(MANIFEST[m].download_bytes for m in queue)
+        self.status.setText(
+            f"{len(queue)} selected · {size_text(total)}."
+            if queue
+            else "All set, or check a model to download or repair it."
+        )
+
+    def describe(self, *_: object) -> None:
+        item = self.models.currentItem()
+        if item is None:
+            return
+        spec = MANIFEST[str(item.data(Qt.ItemDataRole.UserRole))]
         self.detail.setText(
             f"{spec.id}\nLicense: {spec.license}. "
             + (
                 "Download checks or repairs these files. Replaced files are kept in a "
                 ".previous- folder. "
-                if installed
+                if (self.owner.model_root / spec.id).is_dir()
+                else ""
+            )
+            + (
+                "An earlier download will continue where it stopped. "
+                if partial_download(self.owner.model_root, spec.id)
                 else ""
             )
             + (
@@ -124,60 +298,103 @@ class ModelDialog(QDialog):
         )
 
     def start(self) -> None:
-        if self.task or self.owner.busy:
-            self.status.setText("Wait until the current task finishes.")
+        if self.task:
             return
-        model_id = str(self.model.currentData())
-        self.status.setText("Downloading and verifying model…")
-        self.progress.setValue(0)
-        self.model.setEnabled(False)
+        queue = self.checked()
+        if not queue:
+            self.status.setText("Check the models to download.")
+            return
+        root = self.owner.model_root
+
+        def run(task: DownloadTask) -> list[str]:
+            for index, model_id in enumerate(queue):
+                task.step.emit(index, model_id)
+                download_model(
+                    model_id,
+                    root,
+                    progress=task.progress.emit,
+                    cancelled=task.cancelled.is_set,
+                    checking=task.checking.emit,
+                )
+                task.downloaded.emit(model_id)
+            return queue
+
+        self.models.setEnabled(False)
         self.download.setEnabled(False)
         self.cancel.setEnabled(True)
-        task = DownloadTask(
-            lambda t: download_model(
-                model_id,
-                self.owner.model_root,
-                progress=t.progress.emit,
-                cancelled=t.cancelled.is_set,
-            ),
-            self,
-        )
+        task = DownloadTask(run, self)
         self.task = task
+        task.step.connect(lambda index, model_id: self.started(index, len(queue), model_id))
         task.progress.connect(lambda n, total: self.progress.setValue(int(100 * n / total)))
-        task.failed.connect(self.status.setText)
-        task.result.connect(lambda _: self.installed(model_id))
+        task.downloaded.connect(self.installed)
+        task.checking.connect(self.checking)
+        task.failed.connect(self.failed)
+        task.result.connect(self.all_installed)
         task.finished.connect(self.finished_task)
         task.start()
         self.owner._buttons()
 
+    def started(self, index: int, total: int, model_id: str) -> None:
+        self.current = model_id
+        self.progress.setValue(0)
+        self.progress.setFormat(f"%p% · {index + 1} of {total}" if total > 1 else "%p%")
+        self.status.setText(f"Downloading {model_name(model_id)}…")
+        self.owner.status.setText(
+            f"Downloading models ({index + 1} of {total}). You can keep working; "
+            "Manage models shows progress."
+        )
+
+    def checking(self, active: bool) -> None:
+        name = model_name(self.current)
+        self.status.setText(f"Checking the files for {name}…" if active else f"Downloading {name}…")
+
     def installed(self, model_id: str) -> None:
+        self.model_item(model_id).setCheckState(Qt.CheckState.Unchecked)
         if MANIFEST[model_id].task == "speech":
-            self.owner.model.setCurrentIndex(self.owner.model.findData(model_id))
+            selected = str(self.owner.model.currentData() or "")
+            if not self.owner.model_installed(selected):
+                self.owner.model.setCurrentIndex(self.owner.model.findData(model_id))
+            self.owner.adopt_default_speech()
+        else:
+            self.owner.enable_ai_defaults()
         self.owner._save_settings()
-        self.status.setText("Model ready. You can close this window and transcribe.")
+        self.owner.preload_models()  # A newly installed selected model loads right away.
         self.progress.setValue(100)
-        self.describe()
+        self.refresh(keep_status=True)
+
+    def failed(self, message: str) -> None:
+        self.status.setText(f"{model_label(self.current)}: {message}")
+        self.owner.status.setText(f"Model download did not finish. {message}")
+
+    def all_installed(self, done: list[str]) -> None:
+        self.status.setText(
+            ("Models" if len(done) > 1 else "Model")
+            + " ready. You can close this window and transcribe."
+        )
+        self.owner.status.setText("Models ready.")
+        self.owner.finish_model_setup()
 
     def finished_task(self) -> None:
         task, self.task = self.task, None
         if task:
             task.deleteLater()
-        self.model.setEnabled(True)
-        self.download.setEnabled(True)
+        self.models.setEnabled(True)
         self.cancel.setEnabled(False)
+        self.progress.setFormat("%p%")
+        self.download.setEnabled(bool(self.checked()))
+        self.refresh(keep_status=True)  # Keep the result or error visible.
         self.owner._buttons()
 
     def cancel_download(self) -> None:
+        """Stop by choice: keep the progress, and do not restart setup automatically."""
         if self.task:
             self.task.cancelled.set()
-            self.status.setText("Cancelling download…")
+            self.status.setText("Stopping download…")
+            self.owner.finish_model_setup()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.task:
-            self.cancel_download()
-            event.ignore()
-        else:
-            event.accept()
+        # Closing only hides this window; downloads continue in the background.
+        event.accept()
 
 
 class UpdateDialog(QDialog):
@@ -351,14 +568,8 @@ class UpdateDialog(QDialog):
             helper = Path(sys.executable).with_name("audio-transcriber-updater.exe")
             target = self.installer.parent / helper.name
             shutil.copy2(helper, target)
-            arguments = [
-                "--data-dir",
-                str(self.owner.store.data_dir),
-                "--model-root",
-                str(self.owner.model_root),
-            ]
-            if self.owner.ffmpeg:
-                arguments += ["--ffmpeg", self.owner.ffmpeg]
+            # Saved settings carry the model folder and any chosen decoder.
+            arguments = ["--data-dir", str(self.owner.store.data_dir)]
             request = target.parent / "request.json"
             atomic_json(
                 request,
