@@ -13,7 +13,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .acquisition import MANIFEST, AcquisitionError, download_model, get_spec, verify_installed
+from . import resident
+from .acquisition import (
+    DEFAULT_SPEECH_MODEL,
+    MANIFEST,
+    AcquisitionError,
+    cpu_only,
+    download_model,
+    get_spec,
+    verify_installed,
+)
 from .ai_cleanup import (
     DEFAULT_MODEL,
     CleanupCancelled,
@@ -22,35 +31,34 @@ from .ai_cleanup import (
     make_model,
     text_sha256,
 )
+from .ai_cleanup import STYLES as CLEANUP_STYLES
 from .checkpoint import CheckpointError
-from .chunking import DEFAULT_OVERLAP_SECONDS
+from .chunking import DEFAULT_CHUNK_SECONDS, DEFAULT_OVERLAP_SECONDS
 from .config import PROCESSING_DEFAULTS
 from .devices import Benchmark, cache_key, choose_device, load_cached, run_benchmark, save_cached
-from .engines import MockSpeechEngine, OpenVINOWhisperEngine
+from .engines import MockSpeechEngine, OpenVINOWhisperEngine, SherpaTransducerEngine
 from .export import ExportError, write_export
 from .formatting import STYLES as FORMAT_STYLES
 from .formatting import format_session
 from .media import MediaError
 from .pipeline import BatchOptions, BatchRunner, PipelineError
 from .storage import SessionStore
+from .summary import summarize_session
+from .versions import read_saved
 
 
 def default_data_dir() -> Path:
     import os
 
-    override = os.environ.get("AUDIO_TRANSCRIBER_DATA_DIR") or os.environ.get("NPUSCRIBE_DATA_DIR")
+    override = os.environ.get("AUDIO_TRANSCRIBER_DATA_DIR")
     if override:
         return Path(override)
     try:
         import platformdirs
 
-        current = Path(platformdirs.user_data_path("audio-transcriber", appauthor=False))
-        legacy = Path(platformdirs.user_data_path("npu-scribe", appauthor=False))
+        return Path(platformdirs.user_data_path("audio-transcriber", appauthor=False))
     except Exception:  # noqa: BLE001 - fall back beside the platform default
-        current = Path.home() / ".local" / "share" / "audio-transcriber"
-        legacy = current.with_name("npu-scribe")
-    # Reuse an existing library rather than copying recordings and large models.
-    return legacy if legacy.is_dir() and not current.exists() else current
+        return Path.home() / ".local" / "share" / "audio-transcriber"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
     models_download.add_argument("model_id")
 
     subparsers.add_parser("devices", help="enumerate devices and cached benchmarks")
+    subparsers.add_parser(
+        "serve", help="keep models loaded and run jobs from stdin (used by the desktop app)"
+    )
 
     transcribe = subparsers.add_parser("transcribe")
     transcribe.add_argument("input", type=Path)
@@ -90,6 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_cleanup_arguments(cleanup)
     cleanup.add_argument("--stop-file", type=Path, default=None)
     cleanup.add_argument("--formatting", choices=("off", *FORMAT_STYLES), default="off")
+    add_summary_argument(cleanup)
+    cleanup.add_argument(
+        "--summary-style",
+        choices=FORMAT_STYLES,
+        default=None,
+        help="summary layout (default: the --formatting style, or structured when off)",
+    )
+    add_save_only_argument(cleanup)
 
     formatting = subparsers.add_parser(
         "format", help="save a complete transcript with a separate layout"
@@ -100,13 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
     formatting.add_argument("--model", default=DEFAULT_MODEL)
     formatting.add_argument("--device", choices=("AUTO", "CPU", "GPU", "NPU"), default="AUTO")
     formatting.add_argument("--stop-file", type=Path, default=None)
+    add_save_only_argument(formatting, source_revision=True)
 
-    summary = subparsers.add_parser("summarize", help="save separate study notes from a session")
+    summary = subparsers.add_parser("summarize", help="save a written summary of a session")
     summary.add_argument("session_id")
     summary.add_argument("--model", default=DEFAULT_MODEL)
     summary.add_argument("--device", choices=("AUTO", "CPU", "GPU", "NPU"), default="AUTO")
     summary.add_argument("--stop-file", type=Path, default=None)
-    summary.set_defaults(mode="summary", style="light")
+    summary.add_argument("--style", choices=FORMAT_STYLES, default="structured")
+    add_save_only_argument(summary, source_revision=True)
 
     text_cleanup = subparsers.add_parser(
         "cleanup-text", help="clean a local UTF-8 text file with a local model"
@@ -123,7 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--device", default="auto")
     evaluation.add_argument("--overlap-seconds", type=float, default=DEFAULT_OVERLAP_SECONDS)
     evaluation.add_argument(
-        "--chunk-strategy", choices=("fixed", "pause-v1", "pause-v2"), default="fixed"
+        "--chunk-strategy",
+        choices=("fixed", "pause-v1", "pause-v2"),
+        default=None,
+        help="how audio is cut (default: the model's own setting)",
     )
     return parser
 
@@ -131,19 +155,27 @@ def build_parser() -> argparse.ArgumentParser:
 def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
-        default="whisper-tiny.en-int4-ov",
+        default=DEFAULT_SPEECH_MODEL,
         help="installed speech model (mock is an explicit synthetic test fixture)",
     )
     parser.add_argument("--device", default="CPU")
-    parser.add_argument("--chunk-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--chunk-seconds",
+        type=float,
+        default=None,
+        help="longest piece of audio per step (default: the model's own setting)",
+    )
     parser.add_argument("--overlap-seconds", type=float, default=DEFAULT_OVERLAP_SECONDS)
     parser.add_argument(
-        "--chunk-strategy", choices=("fixed", "pause-v1", "pause-v2"), default="fixed"
+        "--chunk-strategy",
+        choices=("fixed", "pause-v1", "pause-v2"),
+        default=None,
+        help="how audio is cut (default: the model's own setting)",
     )
     parser.add_argument("--ffmpeg", default=None)
     parser.add_argument(
         "--cleanup",
-        choices=("off", "light", "medium"),
+        choices=("off", *CLEANUP_STYLES),
         default=None,
         help="cleanup level (default: light for lectures, medium for dictation)",
     )
@@ -156,6 +188,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cleanup-model", default=DEFAULT_MODEL)
     parser.add_argument("--cleanup-device", choices=("AUTO", "CPU", "GPU", "NPU"), default="AUTO")
     parser.add_argument("--cleanup-mode", choices=("lecture", "dictation"), default="lecture")
+    add_summary_argument(parser)
     parser.add_argument(
         "--stop-file",
         type=Path,
@@ -168,12 +201,42 @@ def add_cleanup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--device", choices=("AUTO", "CPU", "GPU", "NPU"), default="AUTO")
     parser.add_argument("--mode", choices=("lecture", "dictation"), default="lecture")
-    parser.add_argument("--style", choices=("light", "medium"), default="light")
+    parser.add_argument("--style", choices=CLEANUP_STYLES, default="light")
+
+
+def add_summary_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--summary",
+        choices=("on", "off"),
+        default=None,
+        help="write a summary after cleanup (default: on for lectures, off for dictation)",
+    )
+
+
+def add_save_only_argument(parser: argparse.ArgumentParser, source_revision: bool = False) -> None:
+    parser.add_argument(
+        "--save-only",
+        action="store_true",
+        help="keep the result as a saved version without replacing the current one",
+    )
+    if source_revision:
+        parser.add_argument(
+            "--source-revision",
+            default=None,
+            help="use this saved AI cleanup (a revision id) instead of the current one",
+        )
+
+
+def wants_summary(args: argparse.Namespace, mode: str) -> bool:
+    choice = getattr(args, "summary", None)
+    return choice == "on" or (choice is None and mode == "lecture")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "serve":
+        return resident.serve()
     if args.command in ("transcribe", "resume"):
         cleanup_default, formatting_default = PROCESSING_DEFAULTS[args.cleanup_mode]
         if args.cleanup is None:
@@ -269,6 +332,16 @@ def run_devices(args: argparse.Namespace, store: SessionStore, data_dir: Path) -
 type EngineFactory = Callable[[str], Any]
 
 
+def chunk_settings(args: argparse.Namespace, model_id: str) -> tuple[float, str]:
+    """The requested chunking, or the model's own (each model was tested with its own)."""
+    spec = MANIFEST.get(model_id)
+    seconds = getattr(args, "chunk_seconds", None)
+    strategy = getattr(args, "chunk_strategy", None)
+    if seconds is None:
+        seconds = spec.chunk_seconds if spec else DEFAULT_CHUNK_SECONDS
+    return float(seconds), strategy or (spec.chunk_strategy if spec else "fixed")
+
+
 def make_engine_provider(
     model_id: str, data_dir: Path, model_root: Path | None = None
 ) -> EngineFactory:
@@ -276,15 +349,34 @@ def make_engine_provider(
         spec = get_spec(model_id)
         if spec.task != "speech":
             raise AcquisitionError("a cleanup model cannot be used for speech transcription")
-        install = verify_installed(model_root or data_dir / "models", spec)
+        root = model_root or data_dir / "models"
+        # The resident worker checks a loaded model's files once, not on every job.
+        install = resident.cached(
+            ("installed", str(root), model_id), lambda: verify_installed(root, spec)
+        )
         if install is None:
             raise AcquisitionError(
                 f"model '{model_id}' is not installed; "
                 f"run 'audio-transcriber models download {model_id}'"
             )
 
+        if spec.runtime == "sherpa-onnx-transducer":
+
+            def provider(device: str) -> Any:
+                return resident.cached(
+                    resident.speech_key(install, spec.id, "CPU"),
+                    lambda: SherpaTransducerEngine(install, spec.id),
+                )
+
+            return provider
+        if spec.runtime != "openvino-whisper":
+            raise AcquisitionError(f"unknown speech runtime '{spec.runtime}' for {model_id}")
+
         def provider(device: str) -> Any:
-            return OpenVINOWhisperEngine(install, spec.id, multilingual=spec.multilingual)
+            return resident.cached(
+                resident.speech_key(install, spec.id, device),
+                lambda: OpenVINOWhisperEngine(install, spec.id, multilingual=spec.multilingual),
+            )
 
         return provider
     if model_id == "mock":
@@ -349,6 +441,8 @@ def resolve_device(
     data_dir: Path,
     model_root: Path | None = None,
 ) -> tuple[str, list[Benchmark]]:
+    if cpu_only(model_id):
+        return "CPU", []  # No device choice and nothing to benchmark.
     is_manual = requested.upper() not in ("AUTO", "")
     if is_manual:
         return requested.upper(), []
@@ -364,13 +458,14 @@ def run_transcribe(args: argparse.Namespace, store: SessionStore, data_dir: Path
     model_root = getattr(args, "model_root", None)
     provider = make_engine_provider(args.model, data_dir, model_root)
     requested, benchmarks = resolve_device(args.device, provider, args.model, data_dir, model_root)
+    chunk_seconds, chunk_strategy = chunk_settings(args, args.model)
     options = BatchOptions(
         model_id=args.model,
         requested_device=requested,
-        chunk_seconds=args.chunk_seconds,
+        chunk_seconds=chunk_seconds,
         overlap_seconds=args.overlap_seconds,
         ffmpeg_path=args.ffmpeg,
-        chunk_strategy=getattr(args, "chunk_strategy", "fixed"),
+        chunk_strategy=chunk_strategy,
     )
     stop_file = getattr(args, "stop_file", None)
     runner = BatchRunner(
@@ -389,13 +484,14 @@ def run_resume(args: argparse.Namespace, store: SessionStore, data_dir: Path) ->
     model_root = getattr(args, "model_root", None)
     provider = make_engine_provider(args.model, data_dir, model_root)
     requested, benchmarks = resolve_device(args.device, provider, args.model, data_dir, model_root)
+    chunk_seconds, chunk_strategy = chunk_settings(args, args.model)
     options = BatchOptions(
         model_id=args.model,
         requested_device=requested,
-        chunk_seconds=args.chunk_seconds,
+        chunk_seconds=chunk_seconds,
         overlap_seconds=args.overlap_seconds,
         ffmpeg_path=args.ffmpeg,
-        chunk_strategy=getattr(args, "chunk_strategy", "fixed"),
+        chunk_strategy=chunk_strategy,
     )
     stop_file = getattr(args, "stop_file", None)
     runner = BatchRunner(
@@ -441,6 +537,7 @@ def finish_transcription(
         mode=getattr(args, "cleanup_mode", "lecture"),
         style=level,
         formatting=getattr(args, "formatting", "off"),
+        summary=getattr(args, "summary", None),
         stop_file=getattr(args, "stop_file", None),
     )
     try:
@@ -475,17 +572,49 @@ def report_session(session: Any) -> None:
     print(f"location: lectures/{session.id}/ under the application data directory")
 
 
+def text_model(
+    model_id: str,
+    models_root: Path,
+    device: str,
+    cache_root: Path,
+    cancelled: Callable[[], bool] | None,
+) -> Any:
+    """A cleanup model; the resident worker reuses its loaded copy for each job."""
+    if resident.CACHE is None:
+        return make_model(model_id, models_root, device, cache_root, cancelled)
+    model = resident.cached(
+        resident.cleanup_key(model_id, models_root, device),
+        lambda: make_model(model_id, models_root, device, cache_root),
+    )
+    # Per-job state: this job's stop file and its own load time.
+    model.cancel_requested = cancelled or (lambda: False)
+    model.load_seconds = 0.0
+    return model
+
+
 def run_cleanup(args: argparse.Namespace, store: SessionStore, data_dir: Path) -> int:
     stop = getattr(args, "stop_file", None)
     cancelled = stop.exists if stop else None
-    model = make_model(
+    model = text_model(
         args.model,
         args.model_root or data_dir / "models",
         args.device,
         data_dir / "cache" / "cleanup",
         cancelled,
     )
-    if args.command in ("cleanup", "summarize"):
+    save_only = getattr(args, "save_only", False)
+    if args.command == "summarize":
+        return run_summary(
+            args.session_id,
+            args.model,
+            args.device,
+            model,
+            store,
+            save_only,
+            getattr(args, "source_revision", None),
+            getattr(args, "style", "structured"),
+        )
+    if args.command == "cleanup":
         path = cleanup_session(
             store,
             args.session_id,
@@ -496,18 +625,22 @@ def run_cleanup(args: argparse.Namespace, store: SessionStore, data_dir: Path) -
             args.style,
             cancelled,
             lambda done, total: print(f"cleanup_blocks: {done}/{total}", flush=True),
+            publish=not save_only,
         )
-        print(f"{'Summary' if args.command == 'summarize' else 'AI cleanup'} ready: {path}")
+        transcript = read_saved(path)
+        revision = (transcript.transformation or {})["revision_id"]
+        print(f"AI cleanup ready: {path}")
+        print(f"saved_revision: ai {revision}")
         print(f"cleanup_device: {getattr(model, 'device', args.device)}")
         if getattr(model, "fallback_reason", None):
             print(f"cleanup_fallback: {model.fallback_reason}")
-        transcript = store.load_transcript(
-            args.session_id, "summary" if args.command == "summarize" else "ai"
-        )
         records = (transcript.transformation or {}).get("blocks", [])
         if any(record["used_source"] for record in records):
             print("Some blocks retained source text after validation warnings; review the result.")
-        if args.command == "cleanup" and getattr(args, "formatting", "off") != "off":
+        # A saved-only cleanup is not current, so later steps read it by revision.
+        source_revision = revision if save_only else None
+        status = 0
+        if getattr(args, "formatting", "off") != "off":
             format_args = argparse.Namespace(
                 session_id=args.session_id,
                 source="ai",
@@ -516,9 +649,32 @@ def run_cleanup(args: argparse.Namespace, store: SessionStore, data_dir: Path) -
                 model_root=args.model_root,
                 device=args.device,
                 stop_file=stop,
+                save_only=save_only,
+                source_revision=source_revision,
             )
-            return run_format(format_args, store, data_dir, model)
-        return 0
+            status = run_format(format_args, store, data_dir, model)
+        if wants_summary(args, args.mode):
+            formatting = getattr(args, "formatting", "off")
+            summary_style = getattr(args, "summary_style", None) or (
+                formatting if formatting != "off" else "structured"
+            )
+            try:
+                run_summary(
+                    args.session_id,
+                    args.model,
+                    args.device,
+                    model,
+                    store,
+                    save_only,
+                    source_revision,
+                    summary_style,
+                )
+            except CleanupCancelled:
+                raise
+            except (RuntimeError, OSError, ValueError) as error:
+                print(f"AI cleanup is ready. The summary failed: {error}", file=sys.stderr)
+                return 1
+        return status
     source, output = args.input.expanduser().resolve(), args.output.expanduser().resolve()
     if source == output:
         raise ValueError("cleanup output must differ from its source")
@@ -560,13 +716,43 @@ def run_cleanup(args: argparse.Namespace, store: SessionStore, data_dir: Path) -
     return 0
 
 
+def run_summary(
+    session_id: str,
+    model_id: str,
+    device: str,
+    model: Any,
+    store: SessionStore,
+    save_only: bool = False,
+    source_revision: str | None = None,
+    style: str = "structured",
+) -> int:
+    path = summarize_session(
+        store,
+        session_id,
+        model,
+        model_id,
+        device,
+        getattr(model, "cancel_requested", None),
+        lambda done, total: print(f"cleanup_blocks: {done}/{total}", flush=True),
+        publish=not save_only,
+        source_revision=source_revision,
+        style=style,
+    )
+    info = read_saved(path).transformation or {}
+    print(f"Summary ready: {path}")
+    print(f"saved_revision: summary {info['revision_id']}")
+    if info.get("warnings"):
+        print("The summary has validation warnings; review it against the transcript.")
+    return 0
+
+
 def run_format(
     args: argparse.Namespace, store: SessionStore, data_dir: Path, model: Any = None
 ) -> int:
     stop = getattr(args, "stop_file", None)
     cancelled = stop.exists if stop else None
     if args.style != "prose" and model is None:
-        model = make_model(
+        model = text_model(
             args.model,
             args.model_root or data_dir / "models",
             args.device,
@@ -583,9 +769,12 @@ def run_format(
         args.device,
         cancelled,
         lambda done, total: print(f"format_blocks: {done}/{total}", flush=True),
+        publish=not getattr(args, "save_only", False),
+        source_revision=getattr(args, "source_revision", None),
     )
+    transcript = read_saved(path)
     print(f"Formatted transcript ready: {path}")
-    transcript = store.load_transcript(args.session_id, "formatted")
+    print(f"saved_revision: formatted {(transcript.transformation or {})['revision_id']}")
     print(f"format_device: {transcript.provenance.actual_device}")
     if any(record["used_source"] for record in (transcript.transformation or {}).get("blocks", [])):
         print("Some layouts were rejected; those blocks use complete source text in prose.")
@@ -607,6 +796,7 @@ def run_evaluate(args: argparse.Namespace, data_dir: Path) -> int:
     model_root = getattr(args, "model_root", None)
     provider = make_engine_provider(model_id, data_dir, model_root)
     requested, _benchmarks = resolve_device(args.device, provider, model_id, data_dir, model_root)
+    chunk_seconds, chunk_strategy = chunk_settings(args, model_id)
     report = EvaluationReport(manifest_name=str(manifest.get("name", args.manifest.stem)))
     eval_media = data_dir / "evaluation" / "media"
     eval_store = SessionStore(data_dir)
@@ -617,8 +807,9 @@ def run_evaluate(args: argparse.Namespace, data_dir: Path) -> int:
         BatchOptions(
             model_id=model_id,
             requested_device=requested,
+            chunk_seconds=chunk_seconds,
             overlap_seconds=getattr(args, "overlap_seconds", DEFAULT_OVERLAP_SECONDS),
-            chunk_strategy=getattr(args, "chunk_strategy", "fixed"),
+            chunk_strategy=chunk_strategy,
         ),
     )
 

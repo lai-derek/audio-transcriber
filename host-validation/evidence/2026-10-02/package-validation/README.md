@@ -83,7 +83,7 @@ cleared at that checkpoint; Windows retained its empty root because another proc
 ## Reproduction and limits
 
 See [packaging](../../../../packaging/README.md) for the build and frozen-worker
-workflow commands, and [Testing](../../../../TESTING.md) for clean wheel smoke.
+workflow commands, and [Development](../../../../DEVELOPMENT.md#package-checks) for clean wheel smoke.
 Build/test artifacts, recordings, exports and screenshots remain ignored.
 A later rebuilt bundle passed the [native frozen review checks](../frozen-review/README.md)
 for dropdowns, playback, seek, editing, search, history and twelve Windows picker

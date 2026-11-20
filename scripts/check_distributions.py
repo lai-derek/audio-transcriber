@@ -34,7 +34,7 @@ def check_names(names: set[str], required: set[str]) -> None:
         if path.is_absolute() or ".." in path.parts:
             raise ValueError(f"unsafe archive member: {name}")
         if (
-            path.name == "AGENTS.md"
+            path.name.upper() in {"AGENTS.MD", "HANDOFF.MD"}
             or path.suffix.lower() in PRIVATE_SUFFIXES
             or any(
                 part in PRIVATE_DIRECTORIES
@@ -80,6 +80,7 @@ def main() -> None:
                 "README.md",
                 "LICENSE",
                 "docs/USER_GUIDE.md",
+                "ARCHITECTURE.md",
                 "packaging/desktop_entry.py",
                 "packaging/worker_entry.py",
                 "packaging/audio-transcriber.spec",

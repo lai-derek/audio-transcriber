@@ -32,6 +32,7 @@ host-validation/reports/
 
 # Local coding-assistant instructions and state are not product source.
 /AGENTS.md
+/HANDOFF.md
 /.agent/
 /.agents/
 /.codex/

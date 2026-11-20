@@ -1,9 +1,10 @@
 """Media decoding boundary.
 
 Ordinary transcription accepts WAV, MP3, M4A, and MP4 here and always receives
-normalized mono 16 kHz PCM. Direct PCM WAV inspection stays available without an
-external decoder; every other container requires FFmpeg, selected explicitly
-or discovered on the current machine's PATH.
+normalized mono 16 kHz PCM. A WAV that is already mono 16 kHz PCM is read directly
+without an external decoder; every other file, including stereo, 44.1/48 kHz,
+24-bit, or floating-point WAV, goes through FFmpeg (bundled with the installer,
+selected explicitly, or discovered on PATH).
 
 Security rules enforced in this module:
 - FFmpeg is never invoked through a shell; arguments are a fixed array.
@@ -84,6 +85,25 @@ def inspect_pcm_wav(path: Path) -> tuple[int, int, int]:
         raise MediaError(f"malformed WAV file: {error}") from error
 
 
+DIRECT_SAMPLE_WIDTHS = (1, 2, 4)  # Bytes per sample the chunk reader converts itself.
+
+
+def wav_needs_conversion(path: Path) -> bool:
+    """False only for an uncompressed mono 16 kHz WAV the app can read directly."""
+    try:
+        with wave.open(str(path), "rb") as handle:
+            return not (
+                handle.getcomptype() == "NONE"
+                and handle.getnchannels() == 1
+                and handle.getframerate() == TARGET_RATE
+                and handle.getsampwidth() in DIRECT_SAMPLE_WIDTHS
+            )
+    except wave.Error, EOFError:
+        # Floating-point, extensible, or compressed WAVs the wave module cannot read;
+        # FFmpeg decodes them or reports a clear error.
+        return True
+
+
 class PcmWavDecoder:
     """Direct decoder for validated mono 16 kHz PCM WAV."""
 
@@ -137,10 +157,7 @@ def build_ffmpeg_args(ffmpeg_path: str, source: Path, destination: Path) -> list
 
 
 class FFmpegDecoder:
-    """Adapter around a user-selected or locally discovered FFmpeg binary.
-
-    The binary is not bundled yet; packaging will pin, license-review, and validate it.
-    """
+    """Adapter around the bundled, user-selected, or locally discovered FFmpeg binary."""
 
     identity = "ffmpeg-adapter-v1"
 

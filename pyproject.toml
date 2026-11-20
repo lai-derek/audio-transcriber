@@ -11,9 +11,14 @@ requires-python = ">=3.14,<3.15"
 license = {file = "LICENSE"}
 dependencies = ["platformdirs==4.12.2"]
 
+[project.urls]
+Source = "https://github.com/lai-derek/audio-transcriber"
+Issues = "https://github.com/lai-derek/audio-transcriber/issues"
+Documentation = "https://github.com/lai-derek/audio-transcriber/blob/main/docs/USER_GUIDE.md"
+
 [project.optional-dependencies]
 desktop = ["PySide6==6.11.2"]
-inference = ["openvino==2026.4.0", "openvino-genai==2026.4.0.0"]
+inference = ["openvino==2026.4.0", "openvino-genai==2026.4.0.0", "sherpa-onnx==1.13.4"]
 bundle = ["pyinstaller==6.22.3"]
 dev = ["pytest==9.1.1", "pytest-cov==7.1.0", "hypothesis==6.168.3", "ruff==0.16.9", "mypy==2.3.1", "build==1.6.1", "hatchling==1.32.4"]
 
@@ -28,8 +33,8 @@ packages = ["src/audio_transcriber"]
 include = [
     "/src", "/tests", "/docs", "/packaging", "/scripts", "/host-validation", "/.github",
     "/pyproject.toml", "/README.md", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
-    "/DEVELOPMENT.md", "/TESTING.md", "/PRIVACY.md", "/ARCHITECTURE.md",
-    "/REQUIREMENTS.md", "/DECISIONS.md", "/MODEL_EVALUATION.md", "/.gitignore", "/.gitattributes",
+    "/DEVELOPMENT.md", "/PRIVACY.md", "/ARCHITECTURE.md",
+    "/.gitignore", "/.gitattributes",
 ]
 
 [tool.ruff]

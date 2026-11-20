@@ -259,13 +259,14 @@ def main() -> None:
         formatted = json.loads(
             (sessions[0].parent / "formatted-transcript.json").read_text(encoding="utf-8")
         )
-        if ai["transformation"]["style"] != "light" or ai["transformation"]["mode"] != "lecture":
+        if ai["transformation"]["style"] != "medium" or ai["transformation"]["mode"] != "lecture":
             raise RuntimeError("Installed lecture cleanup defaults differ")
-        if formatted["transformation"]["style"] != "structured":
+        if formatted["transformation"]["style"] != "mixed":
             raise RuntimeError("Installed lecture formatting default differs")
         for layer, filename in (
             ("ai", "ai-transcript.json"),
             ("formatted", "formatted-transcript.json"),
+            ("summary", "summary-transcript.json"),
         ):
             if not (sessions[0].parent / filename).is_file():
                 raise RuntimeError(f"Installed-worker {layer} result is missing")
@@ -437,13 +438,11 @@ def main() -> None:
         "versioned_reinstall": "0.2.0 to 0.2.1; same application payload",
         "independent_updater_and_reopen": "passed" if args.check_updater else "not requested",
         "installed_worker_model_download": "passed" if args.download_model else "not requested",
-        "installed_lecture_defaults": "light / structured"
-        if args.check_cleanup
-        else "not requested",
+        "installed_lecture_defaults": "medium / mixed" if args.check_cleanup else "not requested",
         "installed_worker_cleanup_and_formatting": "passed"
         if args.check_cleanup
         else "not requested",
-        "installed_worker_ai_and_formatted_exports": "passed"
+        "installed_worker_ai_notes_and_summary_exports": "passed"
         if args.check_cleanup
         else "not requested",
         "uninstall": "passed",

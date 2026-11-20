@@ -95,7 +95,17 @@ def main() -> None:
     library = work / "library"
     library.mkdir()
     (library / "desktop-settings.json").write_text(
-        json.dumps({"model_root": str(models), "model": "whisper-tiny.en-int4-ov"}),
+        json.dumps(
+            {
+                "model_root": str(models),
+                "model": "whisper-tiny.en-int4-ov",
+                # Close/resume only: no first-run downloads, AI steps, or background work.
+                "model_setup": "done",
+                "cleanup_style": "off",
+                "format_style": "off",
+                "background_versions": "off",
+            }
+        ),
         encoding="utf-8",
     )
     native_report = work / "native-result.json"

@@ -70,7 +70,11 @@ def test_bundled_manifest_entries_are_safe() -> None:
     assert MANIFEST, "manifest must not be empty"
     for spec in MANIFEST.values():
         assert spec.requires_remote_code is False
-        assert spec.serialization.startswith("openvino-ir")
+        if spec.runtime == "sherpa-onnx-transducer":
+            assert spec.serialization == "onnx (no pickle)"
+            assert all(f.name.endswith(".onnx") or f.name == "tokens.txt" for f in spec.files)
+        else:
+            assert spec.serialization.startswith("openvino-ir")
         assert ".pkl" not in " ".join(f.name for f in spec.files)
         assert spec.license
         assert spec.revision and len(spec.revision) >= 40
@@ -127,7 +131,7 @@ def test_size_mismatch_rejected_and_cleaned(
     with pytest.raises(AcquisitionError, match="size mismatch"):
         download_model(bad_spec.id, models, local_fetcher(tiny_fixture))
     assert not models.exists() or not any(
-        p for p in models.iterdir() if p.name.startswith(".stage-")
+        p for p in models.iterdir() if p.name.startswith(".partial-")
     )
 
 
@@ -177,13 +181,67 @@ def test_installed_corruption_detected(tmp_path: Path, tiny_fixture: Path, monke
         verify_installed(models, spec)
 
 
-def test_cancelled_download_removes_stage(tmp_path, tiny_fixture, monkeypatch):
+def test_interrupted_download_resumes_without_refetching_verified_files(
+    tmp_path, tiny_fixture, monkeypatch
+):
+    from audio_transcriber.acquisition import DownloadInterrupted, partial_download
+
     spec = local_spec(tmp_path)
     monkeypatch.setitem(MANIFEST, spec.id, spec)
     models = tmp_path / "models"
-    with pytest.raises(AcquisitionError, match="cancelled"):
+    fetched = []
+
+    def drops_second_file(url, destination, expected_size):
+        fetched.append(destination.name)
+        if len(fetched) == 2:
+            raise DownloadInterrupted("network dropped")
+        local_fetcher(tiny_fixture)(url, destination, expected_size)
+
+    with pytest.raises(DownloadInterrupted):
+        download_model(spec.id, models, drops_second_file)
+    assert partial_download(models, spec.id)
+    assert not (models / spec.id).exists()
+    fetched.clear()
+    progress = []
+    result = download_model(
+        spec.id,
+        models,
+        lambda *a: (fetched.append(a[1].name), local_fetcher(tiny_fixture)(*a)),
+        progress=lambda done, total: progress.append((done, total)),
+    )
+    assert fetched == [spec.files[1].name]
+    # The kept file counts toward progress immediately (test fetchers report nothing).
+    assert progress == [(spec.files[0].size, spec.download_bytes)]
+    assert verify_installed(models, spec) == result
+    assert not partial_download(models, spec.id)
+
+
+def test_stopped_download_keeps_progress(tmp_path, tiny_fixture, monkeypatch):
+    from audio_transcriber.acquisition import partial_download
+
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    models = tmp_path / "models"
+    with pytest.raises(AcquisitionError, match="Download stopped"):
         download_model(spec.id, models, local_fetcher(tiny_fixture), cancelled=lambda: True)
-    assert not list(models.iterdir())
+    assert partial_download(models, spec.id)
+
+
+def test_partial_download_with_unexpected_content_starts_over(tmp_path, tiny_fixture, monkeypatch):
+    from audio_transcriber.acquisition import _stage_name
+
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    models = tmp_path / "models"
+    stage = models / _stage_name(spec)
+    stage.mkdir(parents=True)
+    (stage / "extra.py").write_text("unexpected")
+    (stage / spec.files[0].name).write_bytes(b"wrong contents")
+    old_revision = models / f".partial-{spec.id}-0000000000000000"
+    old_revision.mkdir()
+    result = download_model(spec.id, models, local_fetcher(tiny_fixture))
+    assert verify_installed(models, spec) == result
+    assert not old_revision.exists()
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
@@ -216,7 +274,7 @@ def test_failed_repair_keeps_existing_model_in_place(tmp_path, tiny_fixture, mon
     rename = os.rename
 
     def fail_promotion(source, destination):
-        if Path(source).name.startswith(".stage-"):
+        if Path(source).name.startswith(".partial-"):
             raise OSError("promotion failed")
         return rename(source, destination)
 
@@ -224,7 +282,7 @@ def test_failed_repair_keeps_existing_model_in_place(tmp_path, tiny_fixture, mon
     with pytest.raises(OSError, match="promotion failed"):
         download_model(spec.id, models, local_fetcher(tiny_fixture))
     assert {p.name: p.read_bytes() for p in installed.iterdir()} == old
-    assert not list(models.glob(".stage-*"))
+    assert not list(models.glob(".partial-*"))
 
 
 def test_url_construction_is_manifest_only(tmp_path: Path, tiny_fixture: Path) -> None:
@@ -279,3 +337,147 @@ def test_large_model_range_download_checks_server_range_and_contents(tmp_path, m
     Response.headers = {"Content-Range": "bytes 1-10/99"}
     with pytest.raises(AcquisitionError, match="unexpected byte range"):
         acquisition._fetch_ranges("https://huggingface.co/model", destination, len(payload))
+
+
+def test_brief_network_failures_are_retried_without_double_counting(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+
+    import audio_transcriber.acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "RETRY_DELAYS", (0, 0, 0))
+    payload = b"0123456789"
+    attempts = []
+
+    def open_url(url, timeout):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise urllib.error.URLError(TimeoutError("The handshake operation timed out"))
+        if len(attempts) == 2:
+            return io.BytesIO(payload[:4])  # Connection closed partway through.
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(acquisition.urllib.request, "urlopen", open_url)
+    progress = []
+    fetch = acquisition.https_fetcher(report=progress.append)
+    destination = tmp_path / "model.bin"
+    fetch("https://huggingface.co/model", destination, len(payload))
+    assert len(attempts) == 3
+    assert destination.read_bytes() == payload
+    assert sum(progress) == len(payload)
+
+
+def test_persistent_network_failure_explains_recovery(tmp_path, monkeypatch):
+    import urllib.error
+
+    import audio_transcriber.acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "RETRY_DELAYS", (0, 0, 0))
+    attempts = []
+
+    def offline(url, timeout):
+        attempts.append(url)
+        raise urllib.error.URLError(TimeoutError("_ssl.c:983: The handshake operation timed out"))
+
+    monkeypatch.setattr(acquisition.urllib.request, "urlopen", offline)
+    fetch = acquisition.https_fetcher()
+    with pytest.raises(AcquisitionError, match="handshake.*Check your internet connection"):
+        fetch("https://huggingface.co/model", tmp_path / "model.bin", 10)
+    assert len(attempts) == 4
+
+
+def test_missing_file_is_not_retried(tmp_path, monkeypatch):
+    import urllib.error
+
+    import audio_transcriber.acquisition as acquisition
+
+    attempts = []
+
+    def missing(url, timeout):
+        attempts.append(url)
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(acquisition.urllib.request, "urlopen", missing)
+    with pytest.raises(urllib.error.HTTPError):
+        acquisition.https_fetcher()("https://huggingface.co/model", tmp_path / "model.bin", 10)
+    assert len(attempts) == 1
+
+
+def test_range_download_retries_a_failed_range(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+
+    import audio_transcriber.acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "RETRY_DELAYS", (0, 0, 0))
+    payload = bytes(range(256)) * 4
+    failed = []
+
+    def open_request(request, timeout):
+        start, end = map(int, request.get_header("Range").removeprefix("bytes=").split("-"))
+        if not failed:
+            failed.append(start)
+            raise urllib.error.URLError(ConnectionResetError("reset by peer"))
+
+        class Response(io.BytesIO):
+            status = 206
+            headers = {"Content-Range": f"bytes {start}-{end}/{len(payload)}"}
+
+        return Response(payload[start : end + 1])
+
+    monkeypatch.setattr(acquisition.urllib.request, "urlopen", open_request)
+    progress = []
+    destination = tmp_path / "model.bin"
+    acquisition._fetch_ranges(
+        "https://huggingface.co/model", destination, len(payload), progress.append
+    )
+    assert destination.read_bytes() == payload
+    assert sum(progress) == len(payload)
+
+
+def test_range_download_resumes_from_recorded_ranges(tmp_path, monkeypatch):
+    import io
+    import json
+
+    import audio_transcriber.acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "RANGE_BLOCK", 4)
+    payload = b"abcdefghijkl"
+    destination = tmp_path / "model.bin"
+    destination.write_bytes(b"abcd" + bytes(8))  # First range finished earlier.
+    parts = tmp_path / ("model.bin" + acquisition.PARTS_SUFFIX)
+    parts.write_text(json.dumps([0]))
+    requested = []
+
+    def open_request(request, timeout):
+        start, end = map(int, request.get_header("Range").removeprefix("bytes=").split("-"))
+        requested.append(start)
+
+        class Response(io.BytesIO):
+            status = 206
+            headers = {"Content-Range": f"bytes {start}-{end}/{len(payload)}"}
+
+        return Response(payload[start : end + 1])
+
+    monkeypatch.setattr(acquisition.urllib.request, "urlopen", open_request)
+    progress = []
+    acquisition._fetch_ranges(
+        "https://huggingface.co/model", destination, len(payload), progress.append
+    )
+    assert sorted(requested) == [4, 8]
+    assert destination.read_bytes() == payload
+    assert sum(progress) == len(payload)
+    assert not parts.exists()
+
+
+def test_long_checksums_are_announced(tmp_path, tiny_fixture, monkeypatch):
+    import audio_transcriber.acquisition as acquisition
+
+    spec = local_spec(tmp_path)
+    monkeypatch.setitem(MANIFEST, spec.id, spec)
+    monkeypatch.setattr(acquisition, "NOTICEABLE_CHECK_BYTES", 1000)
+    events = []
+    download_model(
+        spec.id, tmp_path / "models", local_fetcher(tiny_fixture), checking=events.append
+    )
+    assert events == [True, False]  # Only the 1000-byte file is long enough to announce.

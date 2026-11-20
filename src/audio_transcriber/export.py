@@ -115,8 +115,26 @@ def write_export(
     fmt: str,
     overwrite: bool = False,
     out_path: Path | None = None,
+    use_user_copy: bool = True,
 ) -> Path:
-    """Deterministic, atomic export; existing files are never silently replaced."""
+    """Deterministic, atomic export; existing files are never silently replaced.
+
+    When the user has their own copy of an AI version, the export is that copy
+    (what the app shows), unless use_user_copy is False.
+    """
+    user = None
+    if use_user_copy and layer in ("ai", "formatted", "summary"):
+        from .versions import load_user_text
+
+        user = load_user_text(store, session_id, layer)
+        if user is not None:
+            current = store.load_transcript(session_id, layer)
+            revision_id = (current.transformation or {}).get("revision_id")
+            if user.based_on_revision != revision_id:
+                user = None
+    if user is not None:
+        content = render_user_copy(store, session_id, layer, fmt, user)
+        return _publish(store, session_id, layer, fmt, content, overwrite, out_path)
     revision = None
     if layer == "edited":
         from .editing import load_revision
@@ -139,6 +157,53 @@ def write_export(
             "changed_segment": revision.changed_segment,
         }
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    return _publish(store, session_id, layer, fmt, content, overwrite, out_path)
+
+
+def render_user_copy(store: Any, session_id: str, layer: str, fmt: str, user: Any) -> str:
+    """The user's whole-document copy, marked as edited by the user."""
+    if fmt == "srt":
+        raise ExportError(
+            "your edited copy has no timing for subtitles; choose text, markdown, or json"
+        )
+    if fmt not in FORMATS:
+        raise ExportError(f"unknown export format '{fmt}'")
+    text = str(user.text).strip() + "\n"
+    if fmt == "text":
+        return text
+    if fmt == "markdown":
+        title = str(store.load_session(session_id).title)
+        return f"# {title}\n\n- layer: {layer}\n- edited by the user\n\n{text}"
+    ai_provenance = None
+    try:
+        ai_provenance = asdict(store.load_transcript(session_id, layer).provenance)
+    except FileNotFoundError:
+        pass
+    value = {
+        "schema_version": SCHEMA_VERSION,
+        "layer": layer,
+        "created_at": user.created_at,
+        "text": user.text,
+        "edit_provenance": {
+            "author": "user",
+            "operation": "whole-document-edit",
+            "revision": user.revision_id,
+            "based_on_revision": user.based_on_revision,
+            "ai_provenance": ai_provenance,
+        },
+    }
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+
+
+def _publish(
+    store: Any,
+    session_id: str,
+    layer: str,
+    fmt: str,
+    content: str,
+    overwrite: bool,
+    out_path: Path | None,
+) -> Path:
     extension = {"markdown": "md"}.get(fmt, fmt)
     destination = out_path or store.exports_dir(session_id) / f"{session_id}.{layer}.{extension}"
     if destination.exists() and not overwrite:

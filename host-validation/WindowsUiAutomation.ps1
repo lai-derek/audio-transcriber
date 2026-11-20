@@ -141,8 +141,16 @@ function ClickElement([IntPtr]$Handle,$Element) {
 function SelectCombo([int]$ProcessId,[IntPtr]$Handle,$Root,[string]$Name,[string]$Value) {
     $combo=FindControl $Root $Name ([System.Windows.Automation.ControlType]::ComboBox)
     if((ValueOf $combo).Current.Value -eq $Value) { return }
-    ClickElement $Handle $combo
-    WaitUntil { [OwnWindow]::FindClass($ProcessId,'QComboBoxPrivateContainer',$null) -ne [IntPtr]::Zero } 'Owned dropdown did not open'
+    # A click can be lost while another app has the foreground; click again before failing.
+    for($attempt=1; $attempt -le 3; $attempt++) {
+        ClickElement $Handle $combo
+        try {
+            WaitUntil { [OwnWindow]::FindClass($ProcessId,'QComboBoxPrivateContainer',$null) -ne [IntPtr]::Zero } 'Owned dropdown did not open' 4
+            break
+        } catch {
+            if($attempt -eq 3) { throw }
+        }
+    }
     $popup=[OwnWindow]::FindClass($ProcessId,'QComboBoxPrivateContainer',$null)
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($popup)
     ClickElement $popup (FindControl $root $Value ([System.Windows.Automation.ControlType]::ListItem))

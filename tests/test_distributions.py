@@ -28,6 +28,8 @@ spec.loader.exec_module(checker)
         ".agents/skills/process-audio/SKILL.md",
         ".codex/config.toml",
         "AGENTS.md",
+        "HANDOFF.md",
+        "handoff.md",
         "models/weights.bin",
     ],
 )

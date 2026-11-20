@@ -1,76 +1,89 @@
 # Development
 
-Use Python 3.14. The main reader setup is in the [README](README.md).
-For development, run from the repository root in a virtual environment:
+How the code is organized is in [Architecture](ARCHITECTURE.md); measured
+choices are in [tested decisions](docs/TESTED_DECISIONS.md).
+
+## Setup
+
+Use 64-bit Python 3.14 (the pinned PySide6, OpenVINO, and sherpa-onnx builds do
+not support 3.15 yet). From the repository root:
 
 ```powershell
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e '.[dev,desktop,inference]'
 ```
 
-The desktop extra supplies Qt. The inference extra supplies OpenVINO and GenAI;
-NumPy may be installed transitively by those runtimes. Microphone recording
-uses Qt Multimedia, which is included with the desktop extra.
+The `desktop` extra supplies Qt (including microphone capture), `inference`
+supplies OpenVINO, OpenVINO GenAI, and sherpa-onnx, and `dev` supplies the test,
+lint, and build tools. On Linux, use `python3 -m venv .venv` and `.venv/bin/python`.
 
-## Local quality checks
+## Checks
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff format --check .
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy src
 .\.venv\Scripts\python.exe -m pytest -m 'not live' --basetemp .pytest-dev-tests
-.\.venv\Scripts\python.exe -m build
-.\.venv\Scripts\python.exe scripts/check_distributions.py dist
 ```
 
-Use a fresh output directory for repeated builds, since the archive checker
-expects exactly one wheel and one source archive. `build` and the pinned Hatchling
-backend are included in the dev extra. Missing tooling is an environment failure;
-a successful build still needs archive inspection and installation checks.
+The default suite uses synthetic media, a mock speech engine, and no network or
+downloaded models; it blocks sockets. Use a new `--basetemp` folder if a previous
+run's files are still in use. For coverage, add
+`--cov=audio_transcriber --cov-report=term`.
 
-On Linux, use `python3 -m venv .venv` and `.venv/bin/python` in place of the
-Windows launcher. See [testing](TESTING.md) for Qt and live-test boundaries.
+The tests cover storage, chunking, checkpoints and resume, devices, the CLI,
+exports, editing and revisions, AI cleanup checks, notes, summaries, saved
+versions, the Trash, the model process, updates, model setup, and packaging
+archives. `tests/test_desktop.py` and `tests/test_desktop_setup.py` drive the Qt
+window offscreen with real child processes and need the `desktop` extra.
 
-## CI and dependencies
+A live test downloads a pinned model and needs network access:
 
-The local workflow definition runs quality checks on Linux Python 3.14 and
-Windows Python 3.14. Qt workflow tests run on Windows with an offscreen platform.
-Linux checks core tests and types; it does not establish desktop compatibility.
-The package job builds a wheel from the source distribution, checks contents,
-and installs the wheel into a fresh environment under ignored `.scratch` storage.
-The smoke check runs in a separate working directory there.
-The installed smoke helper also checks both launchers, synthetic pause/resume,
-and eight Raw/Balanced exports. It refuses an import from an editable checkout.
+```powershell
+$env:AUDIO_TRANSCRIBER_RUN_LIVE = '1'
+.\.venv\Scripts\python.exe -m pytest -m live
+Remove-Item Env:AUDIO_TRANSCRIBER_RUN_LIVE
+```
 
-The workflow has read-only repository permissions and uses pinned commits for
-[checkout](https://github.com/actions/checkout) and
-[setup-python](https://github.com/actions/setup-python). Dependabot is configured
-for weekly package/action updates, with OpenVINO and GenAI updates grouped.
-The [recorded main run](https://github.com/lai-derek/audio-transcriber/actions/runs/37165069295)
-passed on October 3. Local checkpoint changes need a new CI run after publication.
-Keep official actions allowed and workflow commit pins intact. Branch requirements
-must be set in GitHub.
+Remove the variable afterwards; it also turns off the socket block for other tests.
+Hardware, installer, and long-recording checks on Windows are in
+[host validation](host-validation/README.md).
 
-Keep recordings, transcripts, models, logs, and generated build output outside
-publication candidates. Tests use synthetic media. New device behavior needs
-both deterministic failure coverage and a bounded check on the intended hardware.
+## Package checks
 
-## Packaging
+```powershell
+.\.venv\Scripts\python.exe -m build --outdir .scratch/dist
+.\.venv\Scripts\python.exe scripts/check_distributions.py .scratch/dist
+```
 
-Wheels/source distributions are separate from the experimental Windows bundle.
-See [packaging](packaging/README.md) for the GUI/worker recipe, one-host bundle
-checks, and outstanding Windows/redistribution checks. The optional `bundle`
-extra pins PyInstaller; build a Windows application on Windows.
-The Windows installer passed local install, app, reinstall, and uninstall checks.
-A prebuilt GitHub release has not been published.
+The checker reads the wheel and source archive without extracting them, confirms
+the required files, and rejects runtime data, environments, and local assistant
+files. Use an empty output folder each time, since it expects exactly one of each.
+CI then installs the wheel into a fresh environment and runs
+`scripts/smoke_installed.py`, which checks both launchers, pause and resume, and
+exports with the mock engine.
 
-## Standalone distribution boundary
+The Windows installer is a separate build; see the [packaging guide](packaging/README.md).
 
-The repository contains the application, tests, packaging, and documentation.
-Local assistant instructions, skills, settings, and reports are ignored and
-rejected by the distribution checker. Neither an assistant account nor a
-particular coding environment is needed to install or use the application.
+## CI
 
-The [installed engine check](host-validation/evidence/2026-10-02/portable-engine/README.md)
-ran a real CPU transcription from another directory, with a fresh library and
-relocated model/tool files on one Windows computer.
+[CI](.github/workflows/ci.yml) runs the formatting, lint, type, and test checks on
+Windows and Linux with Python 3.14 (the Qt window tests run on Windows only), then
+builds and checks the packages. The workflow has read-only permissions and pins
+its actions by commit. Dependabot proposes weekly dependency and action updates.
+
+## Private data
+
+Tests use synthetic media. Keep recordings, transcripts, models, logs, and build
+output out of Git; `.scratch/` is ignored for local runs. Private evaluation
+outputs belong outside the repository.
+
+## Known gaps
+
+- Real-device results come from one Windows x64 computer.
+- Not yet checked: the installer wizard visually, a second computer, real
+  microphone dictation across many apps, and recovery of unsaved typing after a
+  forced exit.
+- Not implemented: a tray icon, audible dictation cues, and a support bundle.
+- AI cleanup, notes, and summaries are checked for concrete changes such as
+  numbers, not for every change in meaning.

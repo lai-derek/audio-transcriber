@@ -1,6 +1,17 @@
 # Tests and decisions
 
-These measurements predate the Audio Transcriber rename and Python 3.14 update.
+Most measurements below were recorded September 30–October 4, 2026. They predate
+the Audio Transcriber rename, Python 3.14 update, and current AI prompts. The
+November 17 speech-model comparison ran on the current app; the November 18
+comparison used a separate sherpa-onnx script on the same audio and scorer.
+
+Current defaults: speech uses NVIDIA Parakeet TDT 0.6B v2 (int8, sherpa-onnx, CPU,
+two threads) for file imports and live dictation, with Whisper Small and Base as
+alternatives; cleanup uses AUTO (GPU, then CPU). New file imports
+use Medium cleanup with Mixed notes; live dictation uses Medium with Mostly prose.
+The desktop keeps selected models loaded until it closes. Current prompts are
+`cleanup-v4`, `format-v6`, and `summary-v6`; the historical quality and timing
+results below do not validate the newer notes, summary styles, or overview wording.
 
 The project began as an attempt to use an NPU for local speech transcription
 and cleanup while leaving the computer usable. Tests led to different device
@@ -46,6 +57,111 @@ all three devices; utilization was not independently measured.
 [Repeat results](../host-validation/evidence/2026-09-30/lecture-gold-pilot/README.md#matched-lecture-device-repeat),
 [four-clip check and NPU defect](../host-validation/evidence/2026-09-30/device-lecture-evaluation/README.md).
 
+## Speech: larger models and Orukeet (November 17, 2026)
+
+Five local models ran through the app's own pipeline (30-second chunks, CPU,
+OpenVINO 2026.4) on two sets:
+
+- **TED talk** (Craig Venter, TED-LIUM release 3, 15.1 minutes, 2,398
+  human-transcribed words): true word error rate.
+- **15 of the author's phone recordings** (30.9 minutes of unscripted speech;
+  not published): no human transcript yet, so each model is compared with a
+  hosted Oruk Resonance 1 transcript. This is disagreement, not error: hosted
+  Oruk Orukeet and Resonance 1 disagree on 7.1% of words, the noise floor.
+  Resonance 1 is the reference because local Orukeet shares hosted Orukeet's
+  model family.
+
+Both sides were normalized the same way: lowercase, no punctuation, numbers
+written out, fillers dropped. Time is processing time divided by audio length,
+including decoding.
+
+| Model | TED word error | Disagreement, own recordings | Time / audio | Download |
+|---|---:|---:|---:|---:|
+| Whisper tiny.en INT4 | 11.8% | 29.7% | 0.040 | 41 MB |
+| Whisper base.en INT4 (default) | 5.5% | 23.3% | 0.068 | 64 MB |
+| Whisper small.en INT4 | 3.8% | 13.8% | 0.161 | 162 MB |
+| Whisper large-v3-turbo INT4 | 3.8% | 9.8% | 0.486 | 478 MB |
+| Orukeet INT8 (sherpa-onnx, 2 threads) | 3.3% | 10.7% | 0.100 | 487 MB |
+| Oruk Orukeet, hosted (reference check) | 3.0% | 7.1% | — | — |
+| Oruk Resonance 1, hosted (reference) | 3.2% | — | — | — |
+
+Clean TED speech understated the default's error on real recordings: Base's
+5.5% on TED became about 23% disagreement on unscripted phone audio. Word
+counts matched across models, so the gap is misheard words, not dropped
+speech. Larger models close most of it. Oruk's Spectra-2 returned the same
+transcripts as hosted Orukeet and is not listed separately.
+
+On November 17, Base stayed the default while sherpa-onnx models were checked;
+local Orukeet beat Small.en on TED and speed but needed a new runtime and a
+licence review. The hosted drafts came from a private script that is not part of
+this repository; a local scorer computed the numbers. The audio and transcripts stay
+private.
+
+### November 18: sherpa-onnx models, and the new default
+
+Four more models ran with sherpa-onnx 1.13.4 on the CPU (two threads), on the
+same audio with the same scorer, cut at the quietest 100 ms before each
+28-second limit. Speed is relative to local Orukeet in a controlled check
+(180 s of TED, two rounds, power throttling off), measured on battery. The
+silence check fed four 10-second inputs: digital silence, pink noise at
+−50 dBFS, and room tone from the recordings at its own level and at −45 dBFS.
+
+| Model (int8) | TED word error | Disagreement, own recordings | Speed vs Orukeet | Token times | Text on silence or noise |
+|---|---:|---:|---:|---|---|
+| Fluid Speech Pro | 2.8% | 6.4% | 4.6× slower | yes | 0 of 4 |
+| Rumble-2-Flash | 2.9% | 9.5% | 3.3× slower | no | 4 of 4 |
+| Parakeet TDT 0.6B v2 | 3.0% | 6.8% | 1.4× slower | yes | 0 of 4 |
+| Qwen3-ASR 0.6B | 3.6% | 10.5% | 5.0× slower | no | 4 of 4 |
+
+On AC power, Parakeet v2 processed the 180 s of TED in 0.050 of real time with two
+threads and 0.053 with four; eight threads was slowest. A 10-second clip took
+0.47 s with two threads and 0.66 s with four. The app uses two threads.
+
+The app then ran Parakeet v2 through its own pipeline and resident worker, on AC
+power, and the same scorer measured the result. The first try used pause-v2 cuts:
+on TED it found a qualifying pause at only 1 of 32 cuts, cut mid-speech
+elsewhere, and dropped words there (3.3% word error). With pause-v1 cuts at most
+28 seconds, the app matched the harness:
+
+| Run | TED word error | Disagreement, own recordings |
+|---|---:|---:|
+| Harness (quietest 100 ms before 28 s) | 3.0% (71 errors) | 6.8% |
+| App, pause-v2 cuts | 3.3% (79) | 6.8% |
+| App, pause-v1 cuts (default) | 3.0% (73) | 6.7% |
+
+The app processed the 46 minutes in 0.051 of real time, decoding included (0.046
+for recognition alone). An 8-second clip took 0.43 s in the loaded worker.
+Subtitle cues were in order, with a median length of 4.1 s and a maximum of 13 s.
+
+**Decision:** Parakeet TDT 0.6B v2 is the default speech model for file imports
+and live dictation. Whisper Small and Whisper Base stay as selectable alternatives;
+Whisper Tiny remains for tests and the command line but is not offered in the app.
+Reasons:
+
+- **Accuracy:** 3.0% word error on TED against Small's 3.8% and Base's 5.5%, and
+  6.8% disagreement on the recordings against 13.8% and 23.3%, below the 7.1%
+  disagreement between the two hosted drafts.
+- **Speed:** 0.051 of real time in the app, against 0.068 for Base and 0.161 for
+  Small on November 17. The test report lists those runs as on battery, so the
+  comparison is approximate. It needs no device benchmark.
+- **Timestamps:** every token has a start time and duration, so the Original tab,
+  seeking, and subtitles get sentence-level times.
+- **Silence:** it produced no text on any of the silence or noise inputs.
+- **Licence:** CC BY 4.0, which needs attribution but has no share-alike clause.
+
+Fluid Speech Pro was as accurate but 4.6× slower than Orukeet in its int8 build.
+Rumble-2-Flash and Qwen3-ASR were ruled out: no timestamps, and invented text
+on every silence or noise input.
+
+**Caveats:**
+
+- No hand-corrected reference exists yet for the author's recordings; the
+  disagreement numbers measure agreement with one hosted draft, whose errors the
+  Parakeet-family models may share. One TED talk is the only true error figure.
+- Quiet lecture-hall audio was not tested; the model card warns about very quiet
+  input.
+- English only, like the Whisper `.en` models it replaces.
+
 ## Cleanup: quality, speed, and resource cost
 
 An initial 1.5B model lost a corrected date without triggering the checks. The
@@ -55,7 +171,7 @@ small pilot. [Pilot](../host-validation/evidence/2026-10-02/ai-cleanup/README.md
 
 The 7B model ran 25 matched configurations twice per device with the cleanup-v2
 prompt. One ambiguous case was excluded. Warmed timing excludes loading and
-warmup. The current cleanup-v3 prompt has not had this three-device comparison.
+warmup. Later cleanup prompts have not had this three-device comparison.
 
 | Device | Median request | Mean 25-request batch | All targeted checks passed | Final content checks passed |
 |---|---:|---:|---:|---:|
@@ -77,7 +193,7 @@ A separate fixed short request ran alongside moderate hardware graphics activity
 
 CPU percentages are the worker's share of whole-CPU capacity. RAM includes the
 resident speech and cleanup pipelines, excluding the browser and loading. The
-desktop now exits its speech worker before cleanup. With heavier graphics work:
+desktop used separate speech and cleanup workers in this comparison. With heavier graphics work:
 
 | Cleanup device | Idle → cleanup graphics | Approximate slowdown | Cleanup request |
 |---|---:|---:|---:|
@@ -92,9 +208,130 @@ slowdown; the cause remains unknown. These were synthetic browser workloads.
 GPU counters above 100% were discarded, leaving GPU-capacity usage unresolved. [Resource measurements and method](../host-validation/evidence/2026-10-02/cleanup-resource-cost/README.md).
 
 Cached GPU loading was 1.67–3.63 seconds in the matched comparison; first-ever
-NPU compilation in the earlier pilot took 169.7 seconds. Each desktop action
-starts a new worker; long cleanup reuses its model across blocks. AUTO does not
+NPU compilation in the earlier pilot took 169.7 seconds. At that checkpoint, each desktop action
+started a new worker; long cleanup reused its model across blocks. AUTO does not
 measure foreground load or impose resource caps. Off skips the cleanup model.
+
+## Text model speed: batching and prompt lookup (November 18, 2026)
+
+With Parakeet, speech took about 3% of a lecture's processing time; cleanup, notes, and
+summaries took the rest. A full background set for one lecture (three cleanup levels,
+their notes and summaries) took about 2.4 times the recording's length on the GPU.
+
+**Method.** Every text-model request the app made for two recordings was logged:
+a 6.5-minute phone recording and the 15-minute TED talk (cleanup at all three levels,
+Mixed and Structured notes, summaries in all three styles; 123 requests). The same
+requests were then replayed under each option on the GPU (Core Ultra 5 335,
+Intel Graphics, AC power). Accuracy checks:
+
+- cleanup word error against the talk's human transcript, and against Resonance 1 for
+  the phone recording;
+- blocks the app's own checks reject;
+- summary number flags.
+
+The same request on the GPU does not always give the same text: two runs of one
+pipeline matched on 39 of 41 requests, and different pipeline types matched on about 3
+of 41. Differences of that size are noise.
+
+| Option (GPU) | 6.5-min recording | TED talk | Stray "!" tokens |
+|---|---:|---:|---|
+| One request at a time (before) | 422 s | 987 s | none |
+| Speculative decoding, Qwen2.5 1.5B draft | 346 s | — | none |
+| Speculative decoding, Qwen2.5-Coder 0.5B draft | 277 s | — | none |
+| Prompt lookup | 253 s | — | in one of three runs |
+| Batching (blocks of a job sent together) | 172 s | 306 s | in one notes request |
+| Batching + prompt lookup | 156 s | 248 s | thousands |
+| Batching, 16-bit key/value cache | 192 s | 273 s | none |
+| **Batching + prompt lookup, 16-bit key/value cache** | **140 s** | **247 s** | **none** |
+| The same in the app, summary parts reused | — | 186 s | none |
+
+Prompt lookup drafts the next few tokens from the request itself. Cleanup mostly copies
+its input, so cleanup gained the most: about 70 s down to 9–11 s per level on the phone
+recording. The stray tokens ("!", token 0, such as "24,0!0") came from the GPU's default
+8-bit key/value cache. With a 16-bit cache, four full runs and two app runs had none.
+
+| TED talk (raw speech: 3.0%) | Light | Medium | Heavy | Cleanup blocks rejected | Notes blocks rejected |
+|---|---:|---:|---:|---:|---:|
+| Before, app run | 6.5% | 7.0% | 12.4% | 1/36 | 21/34 |
+| Before, second pipeline type | 5.2% | 8.0% | 12.4% | 2/36 | 20/34 |
+| Chosen | 5.2% | 5.5% | 10.6% | 3/36 | 16/34 |
+
+Word error is against the human transcript after cleanup; lower means closer. The three
+rejected cleanup blocks changed how a number was written (for example "a hundred. 142
+pages" to "a hundred and forty-two pages"). The app then keeps those blocks' source
+text. Summary flags were numbers written as digits ("nine billion" as "9 billion") plus
+one or two content errors, as in the runs before.
+
+Memory, TED's largest notes job: peak use above idle was 5.6 GB before, and 6.5 GB with
+a 1 GB key/value cache. Caches of 2 GB and 4 GB used 7.5 GB and 9.4 GB at the same speed.
+On the CPU (fallback), one cleanup level of the talk took 190 s with no stray tokens.
+Stop takes effect within 2–4 s, even in the middle of a batch.
+
+**Decision:** on CPU and GPU, the app sends each job's blocks together (notes also send
+likely retries together), uses prompt lookup (5 tokens, 3-token match), a 16-bit
+key/value cache on the GPU, and a 1 GB cache. It reuses an answer to a repeated request,
+such as a summary's part notes for each style. The NPU still sends one request at a
+time; it was not measured here.
+
+Not adopted:
+
+- Draft models: slower than prompt lookup, and an extra download.
+- A smaller text model: not tried, because accuracy came first.
+- Fewer background versions: a feature change, not a speed fix.
+
+Notes were rejected for about half of all blocks, both before and after this change;
+see the next section.
+
+## Notes: condensed, with unsaid numbers marked (November 19, 2026)
+
+**Role.** Raw (with timestamps) is for specifics, the cleanup is the text to read or
+use as context, and the summary gives the main points. Notes condense the whole
+recording into topics and points for reading less than the full text.
+
+**Why the old notes fell back.** On the TED talk, 16 of 34 notes requests failed
+checks, and 15 of the 16 had real number problems: dropped details ("roughly 20 amino
+acids", "born in 1946") or invented figures ("9 billion by 2040"). The whole block then
+fell back to the source text. Two fixes were tried and dropped:
+
+- A repair round that sent each failed block back with its problems recovered 2 of 6
+  Mixed blocks on TED and no structured ones, at 9–14 s more per job.
+- A layout-only version that copied every word and added headings passed 8 of 9
+  blocks, but it was as long as the cleanup; notes are meant to be shorter.
+
+**Condensing approaches tested** on TED and recording 150 (GPU, same model):
+
+| Approach | Length vs cleanup (TED / 150) | TED numbers kept | Time, both | Result |
+|---|---:|---:|---:|---|
+| Paragraph notes: 1–2 bullets per laid-out paragraph, checked per paragraph | 49% / 25% | 23/24 | 46 s | Distortions; 4 of 39 paragraphs fell back as raw text; lost a section to "None" |
+| Key sentences only (model picks sentence numbers) | 45% / 35% | 13/24 | 32 s | Kept sentences lose their referents; still spoken; copying by text failed (model paraphrased) |
+| Key sentences, then rewrite | 42% / 15% | 13/24 | 45 s | 5 of 9 rewrites failed checks; new misattributions |
+| Abstractive notes per block, unsaid numbers flagged | 24% / 25% | 18/24 | 24 s | Shortest and most readable; distortions comparable |
+
+Judged against a reading of both full transcripts (12 main points for TED, 9 for
+recording 150), paragraph and abstractive notes both carried the main ideas: TED 11
+and 10 of 12 fully, recording 150 6 and 7 of 9. Both made 2–3 distortions per
+recording that no number check catches, such as attributing the speaker's goal to
+someone else, stating a question as fact, or reading a remark backwards.
+
+**Decision.** Abstractive notes, with rules added for attribution and for keeping
+questions as questions, and at least three points per heading. Dropped details are
+allowed. A line giving a number the source never said, in digits or words ("5-7k" for
+"five to seven thousand" passes), is marked "⚠ check this number" and the block is
+flagged; only an empty, runaway, or overlong answer falls back to the source. Result
+in the app (GPU):
+
+| Session, style | Length vs cleanup | Lines marked | Fell back | Time |
+|---|---:|---:|---:|---:|
+| TED, structured | 33% | 2 (invented "by 2050"; a range, a false mark) | 0/6 | 20 s |
+| TED, mixed | 53% | 3 (invented years "2046", "2050") | 0/6 | 29 s |
+| Recording 150, structured | 32% | 0 | 0/3 | 15 s |
+| Recording 150, mixed | 40% | 0 | 0/3 | 16 s |
+
+The attribution rule fixed a person's background that recording 150's notes had
+contradicted, and the TED questions stayed questions; one remark in recording 150 was
+still read backwards. The range
+false mark ("5,000 to 72,000" for "five to seven thousand") was fixed after this run.
+Headings remain frequent (TED structured: 34 for 755 words).
 
 ## Audio cuts: fixed 30 seconds, zero overlap
 
@@ -112,8 +349,34 @@ boundary words that overlap retained. Pause-based cuts had mixed held-out result
 the newer variant worsened base on all three new passages and increased checked
 seam deletions from 3 to 13 compared with the earlier variant. Keep fixed cuts
 as default and pause variants opt-in. Caption references remain provisional.
+These results were for Whisper. Since November 18, the default Parakeet v2 uses
+pause-v1 cuts of at most 28 seconds (see the speech section above); the Whisper
+models keep fixed 30-second cuts.
 [Overlap holdout](../host-validation/evidence/2026-10-01/overlap-holdout/README.md),
 [pause holdout](../host-validation/evidence/2026-10-02/pause-refinement/README.md).
+
+## Earlier Whisper evaluations (September 30–October 2, 2026)
+
+Before Parakeet became the default, the Whisper tiny.en and base.en models were
+measured on CPU unless noted. Base was more accurate on every set:
+
+| Set | tiny.en | base.en |
+|---|---:|---:|
+| AMI meetings, 4 clips (8 min) | 38.10% | 28.05% |
+| TED-LIUM talks, 3 talks (15.2 min) | 14.55% | 12.35% |
+| NPTEL lecture clips, 100 clips | 24.09% | 19.75% |
+
+Two two-hour synthetic CPU runs finished with no sustained memory growth after
+warm-up. NPU Whisper needed its pipeline refreshed between cuts to avoid repeated
+text, and base.en on NPU ran slower than real time on a matched clip. References
+for the AMI, TED-LIUM, and NPTEL sets are published human transcripts that were
+not checked by listening. Evidence:
+[human-reference pilots](../host-validation/evidence/2026-09-30/manual-reference-pilots/README.md),
+[NPTEL pilot](../host-validation/evidence/2026-09-30/lecture-gold-pilot/README.md),
+[device comparison](../host-validation/evidence/2026-09-30/device-lecture-evaluation/README.md),
+[two-hour endurance](../host-validation/evidence/2026-09-30/two-hour-endurance/README.md),
+[continuous Yale passages](../host-validation/evidence/2026-10-01/yale-continuous-pilot/README.md),
+[pause pilot](../host-validation/evidence/2026-10-01/pause-pilot/README.md).
 
 ## October 3: initial file checkpoint
 
@@ -130,7 +393,7 @@ and cleanup hashes. Summary completeness and accuracy remain unmeasured.
 include real CPU/GPU runs, source hashes, and the installed-wheel check.
 At that checkpoint, microphone capture, hotkeys, insertion, and an installer
 were deferred. Later dictation and installer checks are linked below.
-[User guide](USER_GUIDE.md), [software checks](../TESTING.md).
+[User guide](USER_GUIDE.md), [software checks](../DEVELOPMENT.md#checks).
 
 
 ## October 3: dependencies and separate formatting
@@ -211,8 +474,8 @@ Markdown, and JSON. Course text and media remain in ignored local storage, exclu
 
 ## Live dictation: latency and idle memory
 
-Dictation reuses CPU speech and GPU-to-CPU cleanup selection. Its worker exits
-when each recording finishes, releasing model memory while idle. On a ten-second
+Dictation reuses CPU speech and GPU-to-CPU cleanup selection. At this checkpoint,
+its worker exited after each recording. On a ten-second
 clip of a provided speech recording, Off took **2.22 s**. Light cleanup ran twice
 per device; the repeat used existing compilation caches:
 
@@ -286,19 +549,16 @@ interference with one graphics workload; it does not give a GPU utilization
 percentage or establish responsiveness in other apps.
 
 **Decisions:** retain OpenVINO speech and 7B cleanup. Loaded models offer a
-substantial dictation latency reduction, with enough retained RAM to warrant
-an explicit option and idle unloading. This benchmark does not change the app's
-current per-recording worker behavior. The 1.5B model needs better fidelity
+substantial dictation latency reduction at the cost of retained RAM. These
+measurements informed later work on the resident worker. The 1.5B model needs better fidelity
 before becoming a default.
 
 [Measurements, model revisions, and method](../host-validation/evidence/2026-10-04/dictation-efficiency/report.json).
 
 ## Workflow defaults
 
-File imports now start with Light cleanup and Mostly structured formatting.
-Live dictation starts with Medium cleanup and Mostly prose. These defaults
-follow the requested lecture and dictation workflows. Performance tables above
-retain the settings used in each test. The device policy remains CPU speech
-and GPU cleanup with CPU fallback. Existing choices remain
-saved, and raw text stays available. The [installed-app checks](../host-validation/evidence/2026-10-04/installer-checkpoint/README.md#defaults-rebuild)
-verified both sets of defaults, lecture processing, exports, reinstall, and uninstall.
+The October 4 installer used Light cleanup and Mostly structured formatting for
+imports, and Medium cleanup with Mostly prose for dictation. The
+[installed-app checks](../host-validation/evidence/2026-10-04/installer-checkpoint/README.md#defaults-rebuild)
+verified those historical defaults, processing, exports, reinstall, and uninstall.
+Current defaults are listed at the top of this page; saved user choices persist.
